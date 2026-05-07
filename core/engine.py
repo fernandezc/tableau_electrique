@@ -6,14 +6,6 @@ from core.rules import (
     check_circuit_omissions,
     SIMULTANEITY_FACTORS,
 )
-from core.heuristics import (
-    estimate_subscription_residential,
-    extract_housing_params_from_circuits,
-    heuristic_sizing_from_circuits,
-    heuristic_sizing_from_params,
-    estimate_inter_caliber as heuristic_caliber,
-    compute_installed_power,
-)
 # Lazy import for labels
 # from core.labels import generer_pdf_etiquettes
 
@@ -103,7 +95,8 @@ def calibre_inter(inter: InterDiff):
     Logique métier basée sur les équipements, pas sur un calcul puissance/230.
     Délègue au moteur heuristique.
     """
-    return heuristic_caliber(inter.circuits)
+    from core.heuristics import estimate_inter_caliber as _caliber
+    return _caliber(inter.circuits)
 
 
 def suggest_three_phase(total_estimated_va, tableau):
@@ -489,6 +482,15 @@ def compute_sizing_decision(tableau, surface=None, nb_chambres=None):
       - ids : dict des calibres par ID
       - power_diagnostic : dict (informatif)
     """
+    from core.heuristics import (
+        estimate_subscription_residential,
+        extract_housing_params_from_circuits,
+        heuristic_sizing_from_circuits,
+        heuristic_sizing_from_params,
+        estimate_inter_caliber as _caliber,
+        compute_installed_power,
+    )
+
     all_circuits = []
     for inter in tableau.values():
         all_circuits.extend(inter.circuits)
@@ -510,7 +512,7 @@ def compute_sizing_decision(tableau, surface=None, nb_chambres=None):
     ids = {}
     for id_inter, inter in tableau.items():
         ids[id_inter] = {
-            "calibre": heuristic_caliber(inter.circuits),
+            "calibre": _caliber(inter.circuits),
             "type": inter.type,
             "nb_circuits": len(inter.circuits),
         }
