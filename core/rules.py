@@ -132,7 +132,7 @@ def check_circuit_omissions(circuits):
 
     has_vmc = any("vmc" in n for n in noms)
     if not has_vmc:
-        alertes.append({"niveau": "warning", "message": "Pas de VMC détectée", "circuit": None})
+        alertes.append({"niveau": "info", "message": "Pas de VMC détectée", "circuit": None})
 
     return alertes
 

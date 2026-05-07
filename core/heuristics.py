@@ -47,7 +47,7 @@ HOUSING_PROFILES = {
         "label": "Maison avec PAC",
         "surface_max": 200,
         "chambres_max": 6,
-        "description": "Maison avec pompe à chaleur (chauffage + ECS)",
+        "description": "Maison équipée d'une pompe à chaleur",
     },
     "maison_ve": {
         "label": "Maison avec borne VE",
@@ -240,9 +240,10 @@ def estimate_inter_caliber(circuits: list) -> str:
         if any(keyword in n for n in noms):
             return rule["caliber"]
 
+    noms_norm = [n.replace("-", "_") for n in noms]
     heavy_count = sum(
         1 for eq in INTER_HEAVY_EQUIPMENT
-        if any(eq in n for n in noms)
+        if any(eq in n for n in noms_norm)
     )
     if heavy_count >= INTER_HEAVY_THRESHOLD:
         return "63A"

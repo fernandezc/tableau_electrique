@@ -30,7 +30,7 @@ INTER_TYPE_A_RECOMMENDED = [
 ]
 
 INTER_SPECIALISES_A = [
-    "plaque", "lave_linge", "lave-linge", "irve", "borne_irve",
+    "plaque", "lave_linge", "lave-linge", "irve", "borne_irve", "borne",
 ]
 
 INTER_SPECIALISES_AC = [

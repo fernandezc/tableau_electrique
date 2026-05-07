@@ -77,8 +77,8 @@ class TestHeatingChauffage:
 
 class TestEquipements:
     def test_plaque_cuisson_ajoute_bonus(self):
-        sans = estimate_subscription_residential(50, 2, presence_plaque=False)
-        avec = estimate_subscription_residential(50, 2, presence_plaque=True)
+        sans = estimate_subscription_residential(30, 2, presence_plaque=False)
+        avec = estimate_subscription_residential(30, 2, presence_plaque=True)
         assert sans["subscription"] != avec["subscription"]
 
     def test_ve_lent_modifier_zero(self):
