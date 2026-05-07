@@ -189,10 +189,26 @@ with st.sidebar:
                 del st.session_state["confirm_delete"]
                 st.rerun()
 
-    new_name = st.text_input("Renommer", value=st.session_state.project_name, key="rename_input")
-    if new_name != st.session_state.project_name:
-        rename_project(st.session_state.current_project_id, new_name)
-        st.session_state.project_name = new_name
+    st.caption(f"Projet : {st.session_state.project_name}")
+
+    if st.button("✏️ Renommer", use_container_width=True):
+        st.session_state.show_rename = True
+        st.rerun()
+
+    if st.session_state.get("show_rename"):
+        new_name = st.text_input("Nouveau nom", value=st.session_state.project_name, key="rename_input")
+        c_ok, c_cancel = st.columns(2)
+        with c_ok:
+            if st.button("OK", key="rename_ok", use_container_width=True):
+                if new_name.strip():
+                    rename_project(st.session_state.current_project_id, new_name.strip())
+                    st.session_state.project_name = new_name.strip()
+                st.session_state.show_rename = False
+                st.rerun()
+        with c_cancel:
+            if st.button("Annuler", key="rename_cancel", use_container_width=True):
+                st.session_state.show_rename = False
+                st.rerun()
 
     st.caption(f"ID #{st.session_state.current_project_id}")
 
