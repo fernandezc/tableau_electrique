@@ -2,12 +2,13 @@
 Moteur heuristique de dimensionnement résidentiel.
 
 Remplace l'approche additive (somme des puissances x coefficients) par
-des règles métier réalistes terrain, reproduisant la logique d'un
-électricien résidentiel expérimenté.
+des règles métier réalistes terrain, avec une logique progressive
+et nuancée adaptée aux pratiques résidentielles françaises.
 
 Principes :
-  - Dimensionnement par profil habitat (surface, chambres, équipements)
-  - Monophasé par défaut, triphasé uniquement si justifié
+  - Dimensionnement progressif : base surface + ajustements modulaires
+  - Chaque équipement a un poids différencié (petits bonus cumulés)
+  - Monophasé par défaut, triphasé très conservateur
   - Calibre ID par règles métier, pas par calcul puissance / 230
   - Justifications lisibles pour chaque décision
 """
@@ -16,7 +17,7 @@ from typing import Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
-# Profils habitat
+# Profils habitat (pour affichage et classification, pas pour le calcul)
 # ---------------------------------------------------------------------------
 
 HOUSING_PROFILES = {
@@ -24,56 +25,49 @@ HOUSING_PROFILES = {
         "label": "Studio / T1",
         "surface_max": 35,
         "chambres_max": 1,
-        "subscription_base": 6,
         "description": "Petit logement : éclairage, prises, petit électroménager",
     },
     "t2": {
         "label": "T2",
         "surface_max": 55,
         "chambres_max": 2,
-        "subscription_base": 9,
         "description": "Logement standard avec cuisson et électroménager",
     },
     "t3_t4": {
         "label": "T3 / T4 standard",
         "surface_max": 100,
         "chambres_max": 4,
-        "subscription_base": 12,
         "description": "Logement familial avec équipements électriques complets",
     },
     "grande_maison": {
         "label": "Grande maison",
         "surface_max": 999,
         "chambres_max": 99,
-        "subscription_base": 12,
         "description": "Grande maison, nombreux équipements et circuits",
     },
     "maison_pac": {
         "label": "Maison avec PAC",
         "surface_max": 200,
         "chambres_max": 6,
-        "subscription_base": 12,
         "description": "Maison avec pompe à chaleur (chauffage + ECS)",
     },
     "maison_ve": {
         "label": "Maison avec borne VE",
         "surface_max": 999,
         "chambres_max": 99,
-        "subscription_base": 12,
         "description": "Maison avec borne de recharge pour véhicule électrique",
     },
     "atelier": {
         "label": "Maison avec atelier",
         "surface_max": 999,
         "chambres_max": 99,
-        "subscription_base": 15,
         "description": "Logement avec atelier équipé (machines-outils)",
     },
 }
 
 
 # ---------------------------------------------------------------------------
-# Classification du profil logement
+# Classification du profil (pour affichage uniquement)
 # ---------------------------------------------------------------------------
 
 def classify_housing_profile(
@@ -83,11 +77,7 @@ def classify_housing_profile(
     has_ve: bool = False,
     has_atelier: bool = False,
 ) -> str:
-    """Classifie le profil du logement selon ses caractéristiques.
-
-    Retourne la clé du profil parmi :
-      studio, t2, t3_t4, grande_maison, maison_pac, maison_ve, atelier
-    """
+    """Classifie le profil du logement pour l'affichage."""
     if has_atelier and surface > 80:
         return "atelier"
     if has_ve:
@@ -104,7 +94,7 @@ def classify_housing_profile(
 
 
 # ---------------------------------------------------------------------------
-# Estimation abonnement (kVA) — moteur principal heuristique
+# Estimation abonnement (kVA) — logique progressive
 # ---------------------------------------------------------------------------
 
 def estimate_subscription_residential(
@@ -116,94 +106,114 @@ def estimate_subscription_residential(
     chauffage_type: str = "electrique",
     presence_plaque: bool = True,
     presence_chauffe_eau: bool = True,
+    ve_type: str = "standard",
+    pac_type: str = "air_eau",
+    chauffage_principal: Optional[bool] = None,
 ) -> Dict:
-    """Estime l'abonnement conseillé selon des heuristiques terrain.
+    """Estime l'abonnement conseillé selon une logique progressive.
+
+    Le calcul suit le principe :
+      base (progressive selon surface)
+      + petit bonus équipements (poids différencié)
+      + chauffage / PAC
+      + VE (selon type)
+      + atelier (selon importance)
+      = total → arrondi à l'abonnement EDF standard
 
     Paramètres
     ----------
-    surface : float
-        Surface habitable en m².
-    nb_chambres : int
-        Nombre de chambres.
-    has_pac : bool
-        Présence d'une pompe à chaleur.
-    has_ve : bool
-        Présence d'une borne de recharge véhicule électrique.
-    has_atelier : bool
-        Présence d'un atelier équipé.
-    chauffage_type : str
-        "electrique" ou "autre".
-    presence_plaque : bool
-        Présence d'une plaque de cuisson.
-    presence_chauffe_eau : bool
-        Présence d'un chauffe-eau électrique.
+    surface : float — Surface habitable en m².
+    nb_chambres : int — Nombre de chambres.
+    has_pac : bool — Présence d'une pompe à chaleur.
+    has_ve : bool — Présence d'une borne de recharge VE.
+    has_atelier : bool — Présence d'un atelier.
+    chauffage_type : str — "electrique" ou "autre".
+    presence_plaque : bool — Présence plaque cuisson.
+    presence_chauffe_eau : bool — Présence chauffe-eau électrique.
+    ve_type : str — Type de VE : "lent" (3.7kW), "standard" (7kW),
+                    "rapide" (11-14kW), "22kw" (triphasé).
+    pac_type : str — Type PAC : "air_air", "air_eau", "tri".
+    chauffage_principal : bool ou None — Chauffage électrique principal.
+                          None = auto (True si électrique sans PAC).
 
-    Retourne un dict structuré :
-      - subscription : str (ex: "12 kVA")
-      - phase : str ("monophasé" ou "triphasé")
-      - profile : str (clé du profil)
-      - profile_label : str (libellé lisible)
-      - justification : str (explication métier)
-      - calibre_edf : str (calibre disjoncteur EDF)
-      - details : dict (paramètres d'entrée et calcul)
+    Retourne un dict structuré avec abonnement, phase, profil, justification.
     """
+    if chauffage_principal is None:
+        chauffage_principal = (chauffage_type == "electrique" and not has_pac)
+
     profile_key = classify_housing_profile(
         surface, nb_chambres, has_pac, has_ve, has_atelier
     )
     profile = HOUSING_PROFILES[profile_key]
-    base_kva = profile["subscription_base"]
 
-    boost = 0
-    boost_reasons = []
+    # Étape 1 : base progressive selon la surface
+    base = _compute_surface_base(surface)
 
+    # Étape 2 : ajustements modulaires (petits bonus cumulés)
+    parts = []
+    total = base
+
+    # -- Équipements standard (poids léger) --
+    if presence_plaque:
+        total += 1
+        parts.append("cuisson électrique")
+
+    # -- Chauffage --
     if has_pac:
-        pac_boost = 6 if surface > 150 else 3
-        boost += pac_boost
-        boost_reasons.append(f"PAC (+{pac_boost} kVA)")
+        # PAC remplace le chauffage électrique
+        if pac_type == "air_air":
+            total += 2
+            parts.append("PAC air/air")
+        elif pac_type == "air_eau":
+            total += 2
+            parts.append("PAC air/eau")
+        elif pac_type == "tri":
+            total += 3
+            parts.append("PAC triphasée")
+    elif chauffage_principal:
+        if surface > 100:
+            total += 2
+            parts.append("chauffage électrique principal")
+        elif surface >= 70:
+            total += 1
+            parts.append("chauffage électrique")
 
+    # -- Véhicule électrique (poids selon type) --
     if has_ve:
-        boost += 6
-        boost_reasons.append("borne VE (+6 kVA)")
+        ve_mod, ve_label = _ve_modifier(ve_type)
+        total += ve_mod
+        parts.append(ve_label)
 
-    # Pas de boost atelier : le profil atelier a déjà une base à 15 kVA
-
+    # -- Atelier --
     if has_atelier:
-        boost_reasons.append("atelier équipé")
+        at_mod, at_label = _atelier_modifier(surface)
+        total += at_mod
+        parts.append(at_label)
 
-    if chauffage_type == "electrique" and surface > 50:
-        if presence_chauffe_eau and presence_plaque:
-            total_avant = base_kva + boost
-            if total_avant < 12:
-                boost_reasons.append("tout électrique")
-            boost = max(boost, 12 - base_kva)
-
-    total_kva = base_kva + boost
-
-    # Plafonds de réalisme terrain
-
-    # Petite surface (< 50 m²) : jamais plus de 12 kVA
+    # Étape 3 : plafonds de réalisme
     if surface <= 50:
-        total_kva = min(total_kva, 12)
+        total = min(total, 12)
+    elif surface <= 100:
+        total = min(total, 15)
 
-    # Surface moyenne (50-100 m²) : jamais plus de 15 kVA
-    if 50 < surface <= 100:
-        total_kva = min(total_kva, 15)
+    # Étape 4 : arrondi à l'abonnement standard
+    result_kva = _round_to_standard_subscription(total)
 
-    # Maison VE sans PAC : 12 kVA max (gestion de charge supposée)
-    if profile_key == "maison_ve" and not has_pac:
-        total_kva = min(total_kva, 12)
-
-    result_kva = _round_to_standard_subscription(total_kva)
-
+    # Étape 5 : phase (très conservateur)
     phase = determine_phase_type(
-        surface, nb_chambres, has_pac, has_ve, has_atelier, result_kva
+        total_kva=total,
+        has_pac=has_pac,
+        has_ve=has_ve,
+        has_atelier=has_atelier,
+        pac_type=pac_type,
+        ve_type=ve_type,
+        surface=surface,
     )
 
-    calibre_edf = _calibre_edf_from_kva(result_kva)
-
-    justification = _build_subscription_justification(
-        profile_key, profile, has_pac, has_ve, has_atelier,
-        chauffage_type, result_kva, boost_reasons
+    # Étape 6 : justification
+    justification = _build_justification(
+        profile, parts, chauffage_type, chauffage_principal,
+        result_kva, phase, surface,
     )
 
     return {
@@ -212,7 +222,7 @@ def estimate_subscription_residential(
         "profile": profile_key,
         "profile_label": profile["label"],
         "justification": justification,
-        "calibre_edf": calibre_edf,
+        "calibre_edf": _calibre_edf_from_kva(result_kva),
         "details": {
             "surface": surface,
             "nb_chambres": nb_chambres,
@@ -222,39 +232,90 @@ def estimate_subscription_residential(
             "chauffage_type": chauffage_type,
             "presence_plaque": presence_plaque,
             "presence_chauffe_eau": presence_chauffe_eau,
+            "ve_type": ve_type,
+            "pac_type": pac_type,
+            "chauffage_principal": chauffage_principal,
             "profile": profile_key,
-            "base_kva": base_kva,
-            "boost": boost,
-            "total_kva": total_kva,
+            "base_kva": base,
+            "modifiers": parts,
+            "total_kva": total,
             "result_kva": result_kva,
         },
     }
 
 
 # ---------------------------------------------------------------------------
-# Détermination phase
+# Base progressive selon la surface
+# ---------------------------------------------------------------------------
+
+def _compute_surface_base(surface: float) -> int:
+    """Calcule une base d'abonnement progressive selon la surface.
+
+    6 kVA minimum, puis +1 kVA par tranche de ~15 m² au-delà de 30 m²,
+    plafonné à 12 kVA pour ne pas surdimensionner les très grandes surfaces.
+    """
+    if surface <= 30:
+        return 6
+    extra = int((surface - 30) / 15)
+    return min(6 + extra, 12)
+
+
+# ---------------------------------------------------------------------------
+# Modulateurs par équipement
+# ---------------------------------------------------------------------------
+
+def _ve_modifier(ve_type: str):
+    """Modifier VE selon le type de charge."""
+    mapping = {
+        "lent": (0, "VE charge lente 3.7kW"),
+        "standard": (2, "borne VE 7kW"),
+        "rapide": (4, "borne VE rapide 11kW"),
+        "22kw": (5, "borne VE 22kW triphasée"),
+    }
+    return mapping.get(ve_type, (2, "borne VE"))
+
+
+def _atelier_modifier(surface: float):
+    """Modifier atelier selon la surface (proxy de l'importance)."""
+    if surface > 150:
+        return (3, "atelier important")
+    elif surface > 80:
+        return (2, "atelier équipé")
+    return (1, "petit atelier")
+
+
+# ---------------------------------------------------------------------------
+# Phase — très conservateur
 # ---------------------------------------------------------------------------
 
 def determine_phase_type(
-    surface: float,
-    nb_chambres: int,
+    total_kva: int = 12,
     has_pac: bool = False,
     has_ve: bool = False,
     has_atelier: bool = False,
-    total_kva: int = 12,
+    pac_type: str = "standard",
+    ve_type: str = "standard",
+    surface: float = 0,
 ) -> str:
     """Détermine le type d'alimentation.
 
-    Monophasé par défaut pour tout logement standard.
-    Triphasé uniquement si réellement justifié.
+    Monophasé par défaut pour tout logement résidentiel.
+    Triphasé uniquement dans les cas vraiment justifiés :
+      - PAC triphasée
+      - Borne VE 22 kW
+      - Atelier lourd (> 150 m²)
+      - Puissance totale > 18 kVA (cas exceptionnel)
     """
-    if has_atelier:
+    if pac_type == "tri" and surface > 100:
         return "triphasé"
 
-    if total_kva > 15:
+    if ve_type == "22kw":
         return "triphasé"
 
-    if has_ve and has_pac and surface > 150:
+    if has_atelier and surface > 150 and total_kva > 15:
+        return "triphasé"
+
+    if total_kva > 18:
         return "triphasé"
 
     return "monophasé"
@@ -299,16 +360,11 @@ def estimate_inter_caliber(circuits: list) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Extraction paramètres depuis circuits
+# Extraction paramètres depuis circuits (fallback mode manuel)
 # ---------------------------------------------------------------------------
 
 def extract_housing_params_from_circuits(circuits) -> Dict:
-    """Extrait les paramètres logement depuis la liste de circuits.
-
-    Utilisé en mode manuel (saisie libre par l'utilisateur)
-    pour alimenter les heuristiques quand surface/chambres ne sont pas
-    directement renseignés.
-    """
+    """Extrait les paramètres logement depuis la liste de circuits."""
     noms = [c.nom.lower() for c in circuits]
 
     has_pac = any("pac" in n or "pompe" in n for n in noms)
@@ -337,7 +393,7 @@ def extract_housing_params_from_circuits(circuits) -> Dict:
 
 
 def heuristic_sizing_from_circuits(circuits) -> Dict:
-    """Point d'entrée : dimensionnement heuristique depuis une liste de circuits."""
+    """Dimensionnement heuristique depuis une liste de circuits (mode manuel)."""
     params = extract_housing_params_from_circuits(circuits)
     return estimate_subscription_residential(
         surface=params["surface"],
@@ -357,7 +413,7 @@ def heuristic_sizing_from_params(
     has_ve: bool = False,
     has_atelier: bool = False,
 ) -> Dict:
-    """Point d'entrée : dimensionnement heuristique depuis paramètres logement."""
+    """Dimensionnement heuristique depuis paramètres logement."""
     return estimate_subscription_residential(
         surface=surface,
         nb_chambres=nb_chambres,
@@ -372,11 +428,7 @@ def heuristic_sizing_from_params(
 # ---------------------------------------------------------------------------
 
 def compute_installed_power(circuits: list) -> Dict:
-    """Calcule les puissances installées à titre informatif uniquement.
-
-    Retourne un dict avec les valeurs théoriques et estimées.
-    Ce résultat n'est pas utilisé pour les décisions de dimensionnement.
-    """
+    """Calcule les puissances installées à titre informatif uniquement."""
     from core.rules import regles_circuit, SIMULTANEITY_FACTORS
 
     theoretical = 0
@@ -437,36 +489,31 @@ def _round_to_standard_subscription(kva: int) -> int:
 
 
 def _calibre_edf_from_kva(kva: int) -> str:
-    """Retourne le calibre du disjoncteur EDF."""
     mapping = {6: "30A", 9: "45A", 12: "60A", 15: "75A", 18: "90A"}
     return mapping.get(kva, "90A")
 
 
-def _build_subscription_justification(
-    profile_key: str,
+def _build_justification(
     profile: Dict,
-    has_pac: bool,
-    has_ve: bool,
-    has_atelier: bool,
+    parts: list,
     chauffage_type: str,
+    chauffage_principal: bool,
     result_kva: int,
-    boost_reasons: list,
+    phase: str,
+    surface: float,
 ) -> str:
-    """Construit une justification lisible pour l'abonnement conseillé."""
+    """Construit une justification lisible."""
     phrases = [profile["description"]]
 
-    if profile_key == "studio":
+    if parts:
+        phrases.append("équipements : " + ", ".join(parts))
+
+    if not parts and surface <= 35:
         phrases.append("abonnement minimum")
-
-    if boost_reasons:
-        phrases.append("équipements : " + ", ".join(boost_reasons))
-
-    if chauffage_type == "electrique" and profile_key in ("t3_t4", "grande_maison"):
-        phrases.append("chauffage électrique")
 
     phrases.append(f"abonnement conseillé {result_kva} kVA")
 
-    if profile_key == "atelier":
-        phrases.append("triphasé recommandé pour atelier")
+    if phase == "triphasé":
+        phrases.append("alimentation triphasée recommandée")
 
     return " — ".join(phrases)
