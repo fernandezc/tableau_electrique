@@ -36,7 +36,9 @@ init_db()
 # Projets existants
 if "current_project_id" not in st.session_state:
     projects = lister_projets()
-    if not projects:
+    if projects:
+        st.session_state.current_project_id = projects[0][0]
+    else:
         # Migrate circuits.json if exists
         legacy = "circuits.json"
         if os.path.exists(legacy):

@@ -57,8 +57,10 @@ def identifier_specialise(nom):
     return None
 
 
-def regles_circuit(circuit: Circuit):
+def regles_circuit(circuit):
     """Règles NF C 15-100 simplifiées par type de circuit."""
+    if isinstance(circuit, dict):
+        circuit = Circuit(**circuit)
     if circuit.type == "prise":
         if circuit.section == 1.5:
             return {"disj": 16, "max": 8, "puissance": 2000, "label": "Prises 1.5mm²"}
