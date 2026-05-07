@@ -7,6 +7,9 @@ from core.engine import (
     calibre_inter,
     generer_circuits_logement,
     analyser_inter,
+    generate_warnings,
+    compute_reserve_info,
+    compute_total_din_modules,
 )
 from core.rules import regles_circuit, verifier_section_circuit, verifier_dj_circuit
 from core.labels import generer_pdf_etiquettes
@@ -411,6 +414,53 @@ with tab_resultat:
                     else:
                         st.write("Aucun circuit")
 
+            # ========================
+            # CONTRÔLES MÉTIER
+            # ========================
+            st.divider()
+            st.subheader("🔍 Contrôles métier")
+
+            warnings = generate_warnings(tableau)
+            reserve_info = compute_reserve_info(tableau)
+
+            # Résumé réserve
+            col_r1, col_r2, col_r3 = st.columns(3)
+            with col_r1:
+                st.metric("Modules DIN utilisés", reserve_info["used"])
+            with col_r2:
+                st.metric("Modules restants", reserve_info["remaining"])
+            with col_r3:
+                status_res = "✅" if reserve_info["reserve_ok"] else "⚠️"
+                st.metric("Réserve", f"{status_res} {'OK' if reserve_info['reserve_ok'] else 'Faible'}")
+
+            if not warnings:
+                st.success("✅ Aucune alerte métier")
+            else:
+                # Grouper par niveau
+                errors = [w for w in warnings if w["niveau"] == "error"]
+                warns = [w for w in warnings if w["niveau"] == "warning"]
+                infos = [w for w in warnings if w["niveau"] == "info"]
+
+                if errors:
+                    st.error("**Erreurs**")
+                    for w in errors:
+                        ctx = f"[ID {w['inter']}] " if w['inter'] else ""
+                        ctx += f"({w['circuit']})" if w['circuit'] else ""
+                        st.error(f"🚨 {ctx} {w['message']}")
+                if warns:
+                    st.warning("**Avertissements**")
+                    for w in warns:
+                        ctx = f"[ID {w['inter']}] " if w['inter'] else ""
+                        ctx += f"({w['circuit']})" if w['circuit'] else ""
+                        st.warning(f"⚠️ {ctx} {w['message']}")
+                if infos:
+                    st.info("**Informations**")
+                    for w in infos:
+                        ctx = f"[ID {w['inter']}] " if w['inter'] else ""
+                        ctx += f"({w['circuit']})" if w['circuit'] else ""
+                        st.info(f"ℹ️ {ctx} {w['message']}")
+
+            st.divider()
             # ========================
             # GÉNÉRATION ÉTIQUETTES PDF
             # ========================

@@ -1,7 +1,34 @@
 from core.models import Circuit
 
+# --- Constantes métier centralisées ---
 
-# Détection de type de circuit spécialisé à partir du nom
+# Section (mm²) -> Calibre max DJ (A)
+SECTION_MAX_DJ = {
+    1.5: 16,
+    2.5: 20,
+    4.0: 25,
+    6.0: 32,
+    10.0: 40,
+}
+
+# Largeur modules DIN par équipement
+MODULE_WIDTHS = {
+    "DJ_1P": 1,      # Disjoncteur 1 pôle
+    "DJ_2P": 2,      # Disjoncteur 2 pôles
+    "ID_TYPE_A": 2,   # Interdifferentiel Type A (36mm -> 2 modules)
+    "ID_TYPE_AC": 2,  # Interdifferentiel Type AC
+    "PARAFOUDRE": 2,
+    "TELErupteur": 1,
+    "CONTACTEUR": 2,
+}
+
+# Circuits nécessitant obligatoirement un Type A
+TYPE_A_MANDATORY = ["plaque", "lave_linge", "lave-linge", "irve", "borne_irve", "borne", "vehicule electrique", "chauffe_eau"]
+
+# Circuits recommandant un Type A (sensibles)
+TYPE_A_RECOMMENDED = ["four", "lave_vaisselle", "seche_linge"]
+
+# Détection de type de circuit spécialisé à partir du nom (obsolète, remplacée par validateurs)
 SPECIALISES_A = ["plaque", "lave_linge", "lave-linge", "irve", "borne_irve"]
 SPECIALISES_AC = ["four", "lave_vaisselle", "seche_linge", "chauffe_eau"]
 
@@ -17,7 +44,6 @@ def identifier_specialise(nom):
 
 def regles_circuit(circuit: Circuit):
     """Règles NF C 15-100 simplifiées par type de circuit."""
-
     if circuit.type == "prise":
         if circuit.section == 1.5:
             return {"disj": 16, "max": 8, "puissance": 2000, "label": "Prises 1.5mm²"}
@@ -53,11 +79,104 @@ def regles_circuit(circuit: Circuit):
     return {"disj": 16, "max": 8, "puissance": 1000, "label": "Non défini"}
 
 
-def verifier_section_circuit(circuit: Circuit):
-    """Vérifie la cohérence entre le type de circuit et la section du conducteur.
-
-    Retourne une liste d'alertes si la section n'est pas conforme NF C 15-100.
+def validate_section_vs_breaker(circuit: Circuit):
     """
+    Vérifie la cohérence Section / Disjoncteur.
+    Retourne une liste d'alertes.
+    """
+    alertes = []
+    section = circuit.section
+    regle = regles_circuit(circuit)
+    dj_conseille = regle["disj"]
+
+    if section in SECTION_MAX_DJ:
+        max_dj = SECTION_MAX_DJ[section]
+        if dj_conseille > max_dj:
+            alertes.append({
+                "niveau": "error",
+                "message": f"Section {section}mm² incompatible avec DJ {dj_conseille}A (max {max_dj}A)",
+                "circuit": circuit.nom,
+            })
+    else:
+        alertes.append({
+            "niveau": "warning",
+            "message": f"Section {section}mm² non standard",
+            "circuit": circuit.nom,
+        })
+
+    # Vérification DJ existant spécifique
+    if circuit.dj_existant and circuit.dj_existant > 0:
+        if circuit.dj_existant > dj_conseille:
+            alertes.append({
+                "niveau": "warning",
+                "message": f"DJ surdimensionné : {circuit.dj_existant}A (conseillé {dj_conseille}A)",
+                "circuit": circuit.nom,
+            })
+        elif circuit.dj_existant < dj_conseille:
+            alertes.append({
+                "niveau": "info",
+                "message": f"DJ sous-dimensionné : {circuit.dj_existant}A (conseillé {dj_conseille}A)",
+                "circuit": circuit.nom,
+            })
+
+    return alertes
+
+
+def validate_inter_type(circuit: Circuit):
+    """
+    Vérifie si un circuit nécessite un Type A.
+    Retourne 'A' si requis, 'AC' sinon.
+    """
+    nom = circuit.nom.lower()
+    for kw in TYPE_A_MANDATORY:
+        if kw in nom:
+            return "A"
+    return "AC"
+
+
+def type_inter_diff(circuit: Circuit):
+    """Détermine le type d'interdifférentiel requis pour un circuit."""
+    nom = circuit.nom.lower()
+    if any(x in nom for x in SPECIALISES_A):
+        return "A"
+    return "AC"
+
+
+def check_circuit_omissions(circuits):
+    """
+    Détecte les oublis fréquents dans la conception.
+    Retourne une liste d'alertes.
+    """
+    alertes = []
+    noms = [c.nom.lower() for c in circuits]
+
+    # Cuisine
+    has_cuisine_prises = any("cuisine" in n and "prise" in n for n in noms)
+    has_plaque = any("plaque" in n for n in noms)
+    has_four = any("four" in n for n in noms)
+
+    if not has_cuisine_prises:
+        alertes.append({"niveau": "warning", "message": "Aucune prise de cuisine détectée", "circuit": None})
+    if not has_plaque:
+        alertes.append({"niveau": "info", "message": "Pas de plaque cuisson détectée", "circuit": None})
+    if not has_four:
+        alertes.append({"niveau": "info", "message": "Pas de four détecté", "circuit": None})
+
+    # Éclairage extérieur
+    has_ext = any("ext" in n or "exterieur" in n for n in noms)
+    if not has_ext:
+        alertes.append({"niveau": "info", "message": "Pas d'éclairage extérieur détecté", "circuit": None})
+
+    # VMC
+    has_vmc = any("vmc" in n for n in noms)
+    if not has_vmc:
+        alertes.append({"niveau": "warning", "message": "Pas de VMC détectée", "circuit": None})
+
+    return alertes
+
+
+def verifier_section_circuit(circuit: Circuit):
+    """Vérifie la cohérence entre le type de circuit et la section du conducteur."""
     alertes = []
     nom = circuit.nom.lower()
     section = circuit.section
@@ -96,10 +215,7 @@ def verifier_section_circuit(circuit: Circuit):
 
 
 def verifier_dj_circuit(circuit: Circuit):
-    """Compare le disjoncteur existant avec le calibre recommandé.
-
-    Retourne une liste d'alertes si le DJ existant est sous/sur-dimensionné.
-    """
+    """Compare le disjoncteur existant avec le calibre recommandé."""
     alertes = []
     if circuit.dj_existant is None or circuit.dj_existant == 0:
         return alertes
@@ -114,17 +230,3 @@ def verifier_dj_circuit(circuit: Circuit):
         alertes.append(f"ℹ️ DJ sous-dimensionné : {dj_actuel}A (conseillé {dj_conseille}A)")
 
     return alertes
-
-
-def type_inter_diff(circuit: Circuit):
-    """Détermine le type d'interdifférentiel requis pour un circuit.
-
-    Type A obligatoire pour : plaque, lave-linge, IRVE
-    Tout le reste → AC
-    """
-    nom = circuit.nom.lower()
-
-    if any(x in nom for x in ["plaque", "lave_linge", "lave-linge", "irve", "borne_irve"]):
-        return "A"
-
-    return "AC"
