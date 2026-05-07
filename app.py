@@ -19,138 +19,180 @@ from core.engine import (
 )
 from core.rules import regles_circuit, verifier_section_circuit, verifier_dj_circuit
 from core.labels import generer_pdf_etiquettes
+from core.database import (
+    init_db, lister_projets, load_project, save_project,
+    create_project, delete_project, rename_project,
+)
 import json
 import os
-
-DEFAULT_FILE = "circuits.json"
-STATE_FILE = ".last_file"
-
-
-def sauver_circuits(circuits, fichier, metadata=None):
-    wrapper = {"circuits": [vars(c) for c in circuits]}
-    if metadata:
-        wrapper["metadata"] = metadata
-    with open(fichier, "w") as f:
-        json.dump(wrapper, f, indent=2)
-
-
-def charger_circuits(fichier):
-    with open(fichier, "r") as f:
-        data = json.load(f)
-    if isinstance(data, list):
-        return data
-    return data["circuits"]
-
-
-def charger_metadata(fichier):
-    try:
-        with open(fichier, "r") as f:
-            data = json.load(f)
-        if isinstance(data, dict) and "metadata" in data:
-            return data["metadata"]
-    except Exception:
-        pass
-    return {}
-
-
-def remember_file(fichier):
-    with open(STATE_FILE, "w") as f:
-        f.write(fichier)
-
-
-def last_file():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return f.read().strip()
-    return DEFAULT_FILE
-
 
 # ========================
 # INIT
 # ========================
 st.set_page_config(page_title="⚡ Tableau électrique", layout="wide")
 
-# Fichier courant
-if "current_file" not in st.session_state:
-    st.session_state.current_file = last_file()
+init_db()
 
-# Chargement auto au démarrage
+# Projets existants
+if "current_project_id" not in st.session_state:
+    projects = lister_projets()
+    if not projects:
+        # Migrate circuits.json if exists
+        legacy = "circuits.json"
+        if os.path.exists(legacy):
+            try:
+                with open(legacy) as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    circuits_data = data
+                    meta = {}
+                else:
+                    circuits_data = data.get("circuits", [])
+                    meta = data.get("metadata", {})
+                circuits = [Circuit(**c) for c in circuits_data]
+                pid = create_project("circuits.json (importé)")
+                save_project(pid, circuits, metadata={
+                    "surface": meta.get("surface"),
+                    "chambres": meta.get("chambres"),
+                    "has_pac": meta.get("has_pac", False),
+                    "has_ve": meta.get("has_ve", False),
+                    "has_atelier": meta.get("has_atelier", False),
+                })
+                st.session_state.current_project_id = pid
+                st.session_state.circuits = circuits
+                for k in ("surface", "chambres"):
+                    if k in meta:
+                        st.session_state[f"last_{k}"] = meta[k]
+                for k in ("has_pac", "has_ve", "has_atelier"):
+                    st.session_state[f"last_{k}"] = meta.get(k, False)
+            except Exception:
+                pass
+        if "current_project_id" not in st.session_state:
+            pid = create_project("Projet 1")
+            st.session_state.current_project_id = pid
+
 if "circuits" not in st.session_state:
-    if os.path.exists(st.session_state.current_file):
-        try:
-            st.session_state.circuits = charger_circuits(st.session_state.current_file)
-            meta = charger_metadata(st.session_state.current_file)
-            if meta:
-                st.session_state.last_surface = meta.get("surface")
-                st.session_state.last_chambres = meta.get("chambres")
-                st.session_state.last_has_pac = meta.get("has_pac", False)
-                st.session_state.last_has_ve = meta.get("has_ve", False)
-                st.session_state.last_has_atelier = meta.get("has_atelier", False)
-        except Exception:
-            st.session_state.circuits = []
-    else:
+    try:
+        circuits, meta, name = load_project(st.session_state.current_project_id)
+        st.session_state.circuits = circuits
+        if meta.get("surface") is not None:
+            st.session_state.last_surface = meta["surface"]
+            st.session_state.last_chambres = meta["chambres"]
+            st.session_state.last_has_pac = meta.get("has_pac", False)
+            st.session_state.last_has_ve = meta.get("has_ve", False)
+            st.session_state.last_has_atelier = meta.get("has_atelier", False)
+    except Exception:
         st.session_state.circuits = []
+
 if "tableau" not in st.session_state:
     st.session_state.tableau = None
 
+if "project_name" not in st.session_state:
+    projects = lister_projets()
+    for p in projects:
+        if p[0] == st.session_state.current_project_id:
+            st.session_state.project_name = p[1]
+            break
+
 
 def auto_save():
-    """Sauvegarde automatique dans le fichier courant."""
+    """Sauvegarde automatique dans le projet courant."""
     if st.session_state.circuits:
         meta = {}
         for k in ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier"):
             if k in st.session_state and st.session_state[k] is not None:
                 meta[k.replace("last_", "", 1)] = st.session_state[k]
-        sauver_circuits(st.session_state.circuits, st.session_state.current_file, metadata=meta or None)
-        remember_file(st.session_state.current_file)
+        save_project(
+            st.session_state.current_project_id,
+            st.session_state.circuits,
+            metadata=meta or None,
+        )
+
+
+def _load_project_into_state(pid):
+    circuits, meta, name = load_project(pid)
+    st.session_state.circuits = circuits
+    st.session_state.current_project_id = pid
+    st.session_state.project_name = name
+    st.session_state.tableau = None
+    for k in ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier"):
+        st.session_state.pop(k, None)
+    if meta.get("surface") is not None:
+        st.session_state.last_surface = meta["surface"]
+        st.session_state.last_chambres = meta["chambres"]
+        st.session_state.last_has_pac = meta.get("has_pac", False)
+        st.session_state.last_has_ve = meta.get("has_ve", False)
+        st.session_state.last_has_atelier = meta.get("has_atelier", False)
 
 
 # ========================
-# SIDEBAR : gestion fichiers
+# SIDEBAR : gestion projets
 # ========================
 with st.sidebar:
-    st.header("📁 Fichiers")
+    st.header("📁 Projets")
 
-    fichier = st.text_input("Fichier", value=st.session_state.current_file, key="file_input")
-    st.session_state.current_file = fichier
+    projects = lister_projets()
+    current_ids = [p[0] for p in projects]
 
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("🆕 New", use_container_width=True):
-            st.session_state.circuits = []
-            st.session_state.tableau = None
-            st.session_state.current_file = DEFAULT_FILE
+    if st.session_state.current_project_id not in current_ids and current_ids:
+        _load_project_into_state(current_ids[0])
+        st.rerun()
+
+    if projects:
+        current_idx = current_ids.index(st.session_state.current_project_id)
+        selected = st.selectbox(
+            "Projet",
+            projects,
+            format_func=lambda p: p[1],
+            index=current_idx,
+            key="project_selector",
+        )
+        if selected[0] != st.session_state.current_project_id:
+            _load_project_into_state(selected[0])
             st.rerun()
-    with col_btn2:
-        if st.button("📂 Open", use_container_width=True):
-            if os.path.exists(fichier):
-                try:
-                    st.session_state.circuits = charger_circuits(fichier)
-                    meta = charger_metadata(fichier)
-                    if meta:
-                        st.session_state.last_surface = meta.get("surface")
-                        st.session_state.last_chambres = meta.get("chambres")
-                        st.session_state.last_has_pac = meta.get("has_pac", False)
-                        st.session_state.last_has_ve = meta.get("has_ve", False)
-                        st.session_state.last_has_atelier = meta.get("has_atelier", False)
-                    st.session_state.tableau = None
-                    remember_file(fichier)
-                    st.success(f"Chargé : {fichier}")
-                except Exception as e:
-                    st.error(f"Erreur : {e}")
-            else:
-                st.warning("Fichier introuvable")
 
-    if st.button("💾 Save", use_container_width=True, type="primary"):
-        meta = {}
-        for k in ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier"):
-            if k in st.session_state and st.session_state[k] is not None:
-                meta[k.replace("last_", "", 1)] = st.session_state[k]
-        sauver_circuits(st.session_state.circuits, fichier, metadata=meta or None)
-        remember_file(fichier)
-        st.success(f"Sauvé : {fichier}")
+    col_new, col_del = st.columns(2)
+    with col_new:
+        if st.button("🆕 Nouveau", use_container_width=True):
+            pid = create_project("Nouveau projet")
+            st.session_state.circuits = []
+            st.session_state.current_project_id = pid
+            st.session_state.project_name = "Nouveau projet"
+            st.session_state.tableau = None
+            st.rerun()
+    with col_del:
+        if st.button("🗑️ Suppr.", use_container_width=True):
+            if len(projects) > 1:
+                st.session_state["confirm_delete"] = True
+                st.rerun()
 
-    st.caption(f"Actif : {st.session_state.current_file}")
+    if st.session_state.get("confirm_delete"):
+        st.warning(f"Supprimer «{st.session_state.project_name}» ?")
+        c_ok, c_no = st.columns(2)
+        with c_ok:
+            if st.button("✅ Oui", key="del_yes", use_container_width=True):
+                delete_project(st.session_state.current_project_id)
+                remaining = lister_projets()
+                if remaining:
+                    _load_project_into_state(remaining[0][0])
+                else:
+                    pid = create_project("Projet 1")
+                    st.session_state.circuits = []
+                    st.session_state.current_project_id = pid
+                    st.session_state.project_name = "Projet 1"
+                del st.session_state["confirm_delete"]
+                st.rerun()
+        with c_no:
+            if st.button("❌ Non", key="del_no", use_container_width=True):
+                del st.session_state["confirm_delete"]
+                st.rerun()
+
+    new_name = st.text_input("Renommer", value=st.session_state.project_name, key="rename_input")
+    if new_name != st.session_state.project_name:
+        rename_project(st.session_state.current_project_id, new_name)
+        st.session_state.project_name = new_name
+
+    st.caption(f"ID #{st.session_state.current_project_id}")
 
 st.title("⚡ Tableau électrique NF C 15-100")
 
