@@ -13,6 +13,7 @@ Principes :
   - Justifications lisibles pour chaque décision
 """
 
+import re
 from typing import Dict, List, Optional
 
 
@@ -364,7 +365,12 @@ def estimate_inter_caliber(circuits: list) -> str:
 # ---------------------------------------------------------------------------
 
 def extract_housing_params_from_circuits(circuits) -> Dict:
-    """Extrait les paramètres logement depuis la liste de circuits."""
+    """Extrait les paramètres logement depuis la liste de circuits.
+
+    Utilise les noms de circuits pour inférer la surface et le nombre de
+    chambres de manière réaliste. Fonction de secours quand les paramètres
+    explicites (surface, nb_chambres) ne sont pas disponibles.
+    """
     noms = [c.nom.lower() for c in circuits]
 
     has_pac = any("pac" in n or "pompe" in n for n in noms)
@@ -373,17 +379,29 @@ def extract_housing_params_from_circuits(circuits) -> Dict:
     presence_plaque = any("plaque" in n for n in noms)
     presence_chauffe_eau = any("chauffe" in n for n in noms)
 
-    eclairage_count = sum(1 for c in circuits if c.type == "eclairage")
-    estimated_surface = eclairage_count * 50
-    if estimated_surface < 20:
-        estimated_surface = 50
+    has_sejour = any("séjour" in n or "sejour" in n or "salon" in n for n in noms)
+    has_cuisine = any("cuisine" in n for n in noms)
 
-    chambre_count = sum(1 for n in noms if "chambre" in n)
-    estimated_chambres = max(chambre_count, 2)
+    chambre_nums = set()
+    for n in noms:
+        m = re.search(r'chambre\s*(\d+)', n)
+        if m:
+            chambre_nums.add(int(m.group(1)))
+    nb_estimated_chambres = max(len(chambre_nums), 1 if has_sejour else 0, 1)
+
+    estimated_surface = 0
+    if has_sejour:
+        estimated_surface += 25
+    if has_cuisine:
+        estimated_surface += 10
+    estimated_surface += nb_estimated_chambres * 12
+
+    if estimated_surface < 30:
+        estimated_surface = 50
 
     return {
         "surface": estimated_surface,
-        "nb_chambres": estimated_chambres,
+        "nb_chambres": nb_estimated_chambres,
         "has_pac": has_pac,
         "has_ve": has_ve,
         "has_atelier": has_atelier,

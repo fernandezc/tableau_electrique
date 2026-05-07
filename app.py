@@ -26,16 +26,31 @@ DEFAULT_FILE = "circuits.json"
 STATE_FILE = ".last_file"
 
 
-def sauver_circuits(circuits, fichier):
-    data = [vars(c) for c in circuits]
+def sauver_circuits(circuits, fichier, metadata=None):
+    wrapper = {"circuits": [vars(c) for c in circuits]}
+    if metadata:
+        wrapper["metadata"] = metadata
     with open(fichier, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(wrapper, f, indent=2)
 
 
 def charger_circuits(fichier):
     with open(fichier, "r") as f:
         data = json.load(f)
-    return [Circuit(**c) for c in data]
+    if isinstance(data, list):
+        return data
+    return data["circuits"]
+
+
+def charger_metadata(fichier):
+    try:
+        with open(fichier, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "metadata" in data:
+            return data["metadata"]
+    except Exception:
+        pass
+    return {}
 
 
 def remember_file(fichier):
@@ -64,6 +79,13 @@ if "circuits" not in st.session_state:
     if os.path.exists(st.session_state.current_file):
         try:
             st.session_state.circuits = charger_circuits(st.session_state.current_file)
+            meta = charger_metadata(st.session_state.current_file)
+            if meta:
+                st.session_state.last_surface = meta.get("surface")
+                st.session_state.last_chambres = meta.get("chambres")
+                st.session_state.last_has_pac = meta.get("has_pac", False)
+                st.session_state.last_has_ve = meta.get("has_ve", False)
+                st.session_state.last_has_atelier = meta.get("has_atelier", False)
         except Exception:
             st.session_state.circuits = []
     else:
@@ -75,7 +97,11 @@ if "tableau" not in st.session_state:
 def auto_save():
     """Sauvegarde automatique dans le fichier courant."""
     if st.session_state.circuits:
-        sauver_circuits(st.session_state.circuits, st.session_state.current_file)
+        meta = {}
+        for k in ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier"):
+            if k in st.session_state and st.session_state[k] is not None:
+                meta[k.replace("last_", "", 1)] = st.session_state[k]
+        sauver_circuits(st.session_state.circuits, st.session_state.current_file, metadata=meta or None)
         remember_file(st.session_state.current_file)
 
 
@@ -100,6 +126,13 @@ with st.sidebar:
             if os.path.exists(fichier):
                 try:
                     st.session_state.circuits = charger_circuits(fichier)
+                    meta = charger_metadata(fichier)
+                    if meta:
+                        st.session_state.last_surface = meta.get("surface")
+                        st.session_state.last_chambres = meta.get("chambres")
+                        st.session_state.last_has_pac = meta.get("has_pac", False)
+                        st.session_state.last_has_ve = meta.get("has_ve", False)
+                        st.session_state.last_has_atelier = meta.get("has_atelier", False)
                     st.session_state.tableau = None
                     remember_file(fichier)
                     st.success(f"Chargé : {fichier}")
@@ -109,7 +142,11 @@ with st.sidebar:
                 st.warning("Fichier introuvable")
 
     if st.button("💾 Save", use_container_width=True, type="primary"):
-        sauver_circuits(st.session_state.circuits, fichier)
+        meta = {}
+        for k in ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier"):
+            if k in st.session_state and st.session_state[k] is not None:
+                meta[k.replace("last_", "", 1)] = st.session_state[k]
+        sauver_circuits(st.session_state.circuits, fichier, metadata=meta or None)
         remember_file(fichier)
         st.success(f"Sauvé : {fichier}")
 
