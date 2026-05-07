@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "tableau_electrique"
+version = "0.2.0"
+description = "Dimensionnement de tableau électrique NF C 15-100 (moteur heuristique résidentiel)"
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit",
+    "pandas",
+    "reportlab",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
