@@ -4,48 +4,77 @@ from core.rules import (
     type_inter_diff, regles_circuit,
     validate_section_vs_breaker, validate_inter_type,
     check_circuit_omissions,
+    SIMULTANEITY_FACTORS,
 )
-# from core.labels import generer_pdf_etiquettes  # Lazy import below if needed
+# Lazy import for labels
+# from core.labels import generer_pdf_etiquettes
 
 
-# --- Calcul modules DIN ---
+# --- Calculs de puissance séparés ---
 
-def compute_din_modules(inter: InterDiff):
-    """
-    Calcule le nombre de modules DIN occupés par un interdifférentiel.
-    - ID = 2 modules (36mm)
-    - DJ standard = 1 module (18mm) par circuit
-    """
-    modules = 2  # L'interdifférentiel lui-même
+def compute_theoretical_power(inter: InterDiff):
+    """Calcule la puissance théorique installée (somme brute)."""
+    total = 0
     for c in inter.circuits:
-        modules += 1  # DJ 1P = 1 module
-    return modules
+        regle = regles_circuit(c)
+        total += regle["puissance"]
+    return total
 
 
-def compute_total_din_modules(tableau):
-    """Calcule le total des modules DIN utilisés."""
-    return sum(compute_din_modules(inter) for inter in tableau.values())
+def _get_circuit_factor(c: Circuit):
+    """Retourne le coefficient de foisonnement pour un circuit."""
+    nom = c.nom.lower()
+    for key, factor in SIMULTANEITY_FACTORS.items():
+        if key in nom:
+            return factor
+    if c.type == "prise":
+        return SIMULTANEITY_FACTORS.get("prises", 0.2)
+    if c.type == "eclairage":
+        return SIMULTANEITY_FACTORS.get("eclairage", 0.8)
+    return 0.5
 
 
-def compute_din_remaining(modules_used, max_per_row=36):
+def compute_estimated_load(inter: InterDiff):
     """
-    Calcule les modules restants par rangée.
-    Par défaut : 36 modules par rangée (630mm).
+    Calcule la charge estimée réelle avec coefficients de foisonnement.
     """
-    return max(0, max_per_row - modules_used)
+    total = 0
+    for c in inter.circuits:
+        regle = regles_circuit(c)
+        factor = _get_circuit_factor(c)
+        total += regle["puissance"] * factor
+    return int(total)
 
 
-# --- Estimation charge ID ---
+def compute_total_theoretical_power(tableau):
+    """Puissance théorique totale du tableau."""
+    return sum(compute_theoretical_power(inter) for inter in tableau.values())
 
-def estimate_inter_load(inter: InterDiff):
+
+def compute_total_estimated_load(tableau):
+    """Charge estimée totale du tableau."""
+    return sum(compute_estimated_load(inter) for inter in tableau.values())
+
+
+def compute_subscription_estimate(total_estimated_va):
     """
-    Estime la charge d'un interdifférentiel.
-    Retourne un score :
-    - < 5000 : légère
-    - < 8000 : modérée
-    - >= 8000 : forte
+    Estime l'abonnement EDF réaliste pour l'habitat résidentiel.
     """
-    return puissance_inter(inter)
+    if total_estimated_va <= 6000:
+        return "6 kVA (30A)"
+    elif total_estimated_va <= 9000:
+        return "9 kVA (45A)"
+    elif total_estimated_va <= 12000:
+        return "12 kVA (60A)"
+    elif total_estimated_va <= 15000:
+        return "15 kVA (75A)"
+    else:
+        return "18 kVA (80A) ou Triphasé"
+
+
+def compute_inter_load(inter: InterDiff):
+    """Alias pour compatibilité - utilise la charge estimée."""
+    return compute_estimated_load(inter)
 
 
 def get_load_level(puissance):
@@ -58,13 +87,64 @@ def get_load_level(puissance):
         return "high"
 
 
+# --- Calibre interdifférentiel (heuristique réaliste) ---
+
+def calibre_inter(inter: InterDiff):
+    """
+    Détermine le calibre de l'interdifférentiel selon des heuristiques terrain.
+    Monophasé par défaut sauf cas exceptionnels.
+    """
+    p_estimee = compute_estimated_load(inter)
+    nb_circuits = len(inter.circuits)
+
+    # Détection présence gros consommateurs
+    noms = [c.nom.lower() for c in inter.circuits]
+    has_plaque = any("plaque" in n for n in noms)
+    has_pac = any("pac" in n or "pompe" in n for n in noms)
+    has_ve = any("borne" in n or "irve" in n or "vehicule" in n for n in noms)
+    has_chauffe_eau = any("chauffe" in n for n in noms)
+
+    # Logique résidentielle réaliste
+    # Petit tableau : toujours 40A
+    if p_estimee < 7000 and nb_circuits <= 5:
+        return "40A"
+
+    # Standard : 40A ou 63A selon équipements
+    if has_plaque or has_chauffe_eau or p_estimee > 9000:
+        return "63A"
+
+    # Gros équipements
+    if has_pac or has_ve:
+        return "63A"
+
+    # Par défaut
+    return "40A"
+
+
+def suggest_three_phase(total_estimated_va, tableau):
+    """
+    Détermine si le triphasé est réellement justifié.
+    Retourne False par défaut (monophasé privilégié).
+    """
+    # Seuils très élevés
+    if total_estimated_va > 18000:
+        return True
+
+    # Détection atelier ou grossePAC triphasée
+    for inter in tableau.values():
+        noms = [c.nom.lower() for c in inter.circuits]
+        has_big_pac = any("pac" in n and "tri" in n for n in noms)
+        has_atelier = any("atelier" in n for n in noms)
+        if has_big_pac or has_atelier:
+            return True
+
+    return False
+
+
 # --- Génération warnings centralisée ---
 
 def generate_warnings(tableau):
-    """
-    Génère tous les warnings métier pour le tableau.
-    Retourne une liste de dicts avec : niveau, message, circuit, inter.
-    """
+    """Génère tous les warnings métier pour le tableau."""
     warnings = []
 
     # 1. Vérification sections / DJ par circuit
@@ -107,12 +187,12 @@ def generate_warnings(tableau):
 
     # 4. Estimation charge ID
     for id_inter, inter in tableau.items():
-        p = estimate_inter_load(inter)
+        p = compute_estimated_load(inter)
         level = get_load_level(p)
         if level == "high":
             warnings.append({
                 "niveau": "warning",
-                "message": f"ID {id_inter} très chargé : {p} VA",
+                "message": f"ID {id_inter} très chargé : {p} VA (estimé)",
                 "circuit": None,
                 "inter": id_inter,
             })
@@ -129,7 +209,6 @@ def generate_warnings(tableau):
     for id_inter, inter in tableau.items():
         alertes = analyser_inter(inter)
         for a in alertes:
-            # Déterminer le niveau
             if "🚨" in a or "❌" in a:
                 niveau = "error"
             elif "⚠️" in a or "⚡" in a:
@@ -149,10 +228,7 @@ def generate_warnings(tableau):
 # --- Réserve tableau ---
 
 def compute_reserve_info(tableau, reserve_pct=0.20):
-    """
-    Calcule les infos de réserve du tableau.
-    Par défaut : 20% de réserve recommandée.
-    """
+    """Calcule les infos de réserve du tableau."""
     total_used = compute_total_din_modules(tableau)
     max_modules = 36  # 1 rangée standard
     recommended_max = int(max_modules * (1 - reserve_pct))
@@ -162,6 +238,21 @@ def compute_reserve_info(tableau, reserve_pct=0.20):
         "recommended_max": recommended_max,
         "reserve_ok": total_used <= recommended_max,
     }
+
+
+# --- Modules DIN ---
+
+def compute_din_modules(inter: InterDiff):
+    """Calcule le nombre de modules DIN occupés par un interdifférentiel."""
+    modules = 2  # L'interdifférentiel lui-même
+    for c in inter.circuits:
+        modules += 1  # DJ 1P = 1 module
+    return modules
+
+
+def compute_total_din_modules(tableau):
+    """Calcule le total des modules DIN utilisés."""
+    return sum(compute_din_modules(inter) for inter in tableau.values())
 
 
 # --- Fonctions existantes (préservées) ---
@@ -311,10 +402,10 @@ def analyser_inter(inter: InterDiff):
     if len(inter.circuits) > 8:
         alertes.append("⚠️ Trop de circuits ({len(inter.circuits)}/8 max)")
 
-    # Puissance totale
-    p_totale = puissance_inter(inter)
+    # Puissance estimée
+    p_totale = compute_estimated_load(inter)
     if p_totale > 9000:
-        alertes.append(f"⚡ Puissance élevée : {p_totale} VA (> 9000 VA)")
+        alertes.append(f"⚡ Puissance estimée élevée : {p_totale} VA")
 
     # Type A avec seulement des circuits non-A
     if inter.type == "A":
@@ -336,7 +427,7 @@ def verifier_interdiff(inter: InterDiff):
     erreurs = []
     if len(inter.circuits) > 8:
         erreurs.append("Trop de circuits")
-    p = puissance_inter(inter)
+    p = compute_estimated_load(inter)
     if p > 11000:
         erreurs.append("Puissance excessive (> 11000 VA)")
     return "OK" if not erreurs else " / ".join(erreurs)
@@ -369,7 +460,7 @@ def generer_tableau(circuits):
         meilleur_score = float("inf")
         for id_inter, inter in tableau.items():
             if inter.type == t and len(inter.circuits) < 8:
-                score = puissance_inter(inter)
+                score = compute_estimated_load(inter)
                 if score < meilleur_score:
                     meilleur_score = score
                     meilleur_id = id_inter
@@ -382,19 +473,5 @@ def generer_tableau(circuits):
 
 
 def puissance_inter(inter: InterDiff):
-    """Calcule la puissance totale d'un interdifférentiel."""
-    total = 0
-    for c in inter.circuits:
-        regle = regles_circuit(c)
-        total += regle["puissance"]
-    return total
-
-
-def calibre_inter(inter: InterDiff):
-    """Détermine le calibre de l'interdifférentiel selon la puissance."""
-    p = puissance_inter(inter)
-    courant = p / 230
-    if courant <= 40:
-        return "40A"
-    else:
-        return "63A"
+    """Calcule la puissance totale d'un interdifférentiel (pour compatibilité)."""
+    return compute_estimated_load(inter)

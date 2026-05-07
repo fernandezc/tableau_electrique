@@ -10,6 +10,11 @@ from core.engine import (
     generate_warnings,
     compute_reserve_info,
     compute_total_din_modules,
+    compute_theoretical_power,
+    compute_total_theoretical_power,
+    compute_total_estimated_load,
+    compute_subscription_estimate,
+    suggest_three_phase,
 )
 from core.rules import regles_circuit, verifier_section_circuit, verifier_dj_circuit
 from core.labels import generer_pdf_etiquettes
@@ -369,25 +374,31 @@ with tab_resultat:
             st.info("Appuyez sur Calculer pour générer le tableau")
         else:
             # Synthèse en haut
-            p_tot = sum(puissance_inter(inter) for inter in tableau.values())
-            courant_tot = p_tot / 230
+            p_theorique = compute_total_theoretical_power(tableau)
+            p_estimee = compute_total_estimated_load(tableau)
+            abonnement = compute_subscription_estimate(p_estimee)
+            is_three_phase = suggest_three_phase(p_estimee, tableau)
 
             st.subheader("Synthèse")
-            col_s1, col_s2 = st.columns(2)
+            col_s1, col_s2, col_s3 = st.columns(3)
             with col_s1:
-                st.metric("ID", len(tableau))
+                st.metric("Puissance théorique", f"{p_theorique} VA")
             with col_s2:
-                st.metric("Puissance", f"{p_tot} VA")
-            st.write(f"Courant total : {courant_tot:.1f} A")
+                st.metric("Puissance estimée", f"{p_estimee} VA")
+            with col_s3:
+                st.metric("Abonnement conseillé", abonnement)
 
-            if courant_tot <= 30:
-                st.success("✅ Abonnement 6 kVA (30A)")
-            elif courant_tot <= 45:
-                st.info("ℹ️ Abonnement 9 kVA (45A)")
-            elif courant_tot <= 60:
-                st.warning("⚡ Abonnement 12 kVA (60A)")
+            if is_three_phase:
+                st.warning("🔌 Triphasé recommandé")
             else:
-                st.error("🔌 Triphasé recommandé")
+                if p_estimee <= 6000:
+                    st.success("✅ Monophasé 6 kVA (30A)")
+                elif p_estimee <= 9000:
+                    st.info("ℹ️ Monophasé 9 kVA (45A)")
+                elif p_estimee <= 12000:
+                    st.warning("⚡ Monophasé 12 kVA (60A)")
+                else:
+                    st.error("🔌 Triphasé à envisager")
 
             st.divider()
 

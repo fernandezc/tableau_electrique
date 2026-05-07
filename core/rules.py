@@ -11,12 +11,27 @@ SECTION_MAX_DJ = {
     10.0: 40,
 }
 
+# Coefficients de foisonnement (simultanéité)
+SIMULTANEITY_FACTORS = {
+    "plaque": 0.7,
+    "four": 0.5,
+    "lave_linge": 0.4,
+    "lave_vaisselle": 0.4,
+    "chauffe_eau": 0.5,
+    "prises": 0.2,
+    "eclairage": 0.8,
+    "vmc": 1.0,
+    "clim": 0.7,
+    "pac": 0.8,
+    "borne_ve": 1.0,
+}
+
 # Largeur modules DIN par équipement
 MODULE_WIDTHS = {
     "DJ_1P": 1,      # Disjoncteur 1 pôle
     "DJ_2P": 2,      # Disjoncteur 2 pôles
-    "ID_TYPE_A": 2,   # Interdifferentiel Type A (36mm -> 2 modules)
-    "ID_TYPE_AC": 2,  # Interdifferentiel Type AC
+    "ID_TYPE_A": 2,   # Interdifférentiel Type A (36mm -> 2 modules)
+    "ID_TYPE_AC": 2,  # Interdifférentiel Type AC
     "PARAFOUDRE": 2,
     "TELErupteur": 1,
     "CONTACTEUR": 2,
