@@ -6,6 +6,14 @@ from core.rules import (
     check_circuit_omissions,
     SIMULTANEITY_FACTORS,
 )
+from core.heuristics import (
+    estimate_subscription_residential,
+    extract_housing_params_from_circuits,
+    heuristic_sizing_from_circuits,
+    heuristic_sizing_from_params,
+    estimate_inter_caliber as heuristic_caliber,
+    compute_installed_power,
+)
 # Lazy import for labels
 # from core.labels import generer_pdf_etiquettes
 
@@ -91,52 +99,39 @@ def get_load_level(puissance):
 
 def calibre_inter(inter: InterDiff):
     """
-    Détermine le calibre de l'interdifférentiel selon des heuristiques terrain.
-    Monophasé par défaut sauf cas exceptionnels.
+    Détermine le calibre de l'interdifférentiel (40A ou 63A).
+    Logique métier basée sur les équipements, pas sur un calcul puissance/230.
+    Délègue au moteur heuristique.
     """
-    p_estimee = compute_estimated_load(inter)
-    nb_circuits = len(inter.circuits)
-
-    # Détection présence gros consommateurs
-    noms = [c.nom.lower() for c in inter.circuits]
-    has_plaque = any("plaque" in n for n in noms)
-    has_pac = any("pac" in n or "pompe" in n for n in noms)
-    has_ve = any("borne" in n or "irve" in n or "vehicule" in n for n in noms)
-    has_chauffe_eau = any("chauffe" in n for n in noms)
-
-    # Logique résidentielle réaliste
-    # Petit tableau : toujours 40A
-    if p_estimee < 7000 and nb_circuits <= 5:
-        return "40A"
-
-    # Standard : 40A ou 63A selon équipements
-    if has_plaque or has_chauffe_eau or p_estimee > 9000:
-        return "63A"
-
-    # Gros équipements
-    if has_pac or has_ve:
-        return "63A"
-
-    # Par défaut
-    return "40A"
+    return heuristic_caliber(inter.circuits)
 
 
 def suggest_three_phase(total_estimated_va, tableau):
     """
-    Détermine si le triphasé est réellement justifié.
-    Retourne False par défaut (monophasé privilégié).
+    Détermine si le triphasé est justifié.
+    Monophasé par défaut pour le résidentiel standard.
+    Le paramètre total_estimated_va est conservé pour compatibilité
+    mais n'est plus le critère principal.
     """
-    # Seuils très élevés
+    # Collecte tous les noms de circuits
+    all_noms = []
+    for inter in tableau.values():
+        all_noms.extend([c.nom.lower() for c in inter.circuits])
+
+    has_atelier = any("atelier" in n for n in all_noms)
+    has_pac_tri = any("pac" in n and "tri" in n for n in all_noms)
+    has_pac = any("pac" in n or "pompe" in n for n in all_noms)
+    has_ve = any("borne" in n or "irve" in n or "vehicule" in n for n in all_noms)
+
+    # Triphasé justifié uniquement dans ces cas
+    if has_atelier:
+        return True
+    if has_pac_tri:
+        return True
+    if has_ve and has_pac:
+        return True
     if total_estimated_va > 18000:
         return True
-
-    # Détection atelier ou grossePAC triphasée
-    for inter in tableau.values():
-        noms = [c.nom.lower() for c in inter.circuits]
-        has_big_pac = any("pac" in n and "tri" in n for n in noms)
-        has_atelier = any("atelier" in n for n in noms)
-        if has_big_pac or has_atelier:
-            return True
 
     return False
 
@@ -475,3 +470,61 @@ def generer_tableau(circuits):
 def puissance_inter(inter: InterDiff):
     """Calcule la puissance totale d'un interdifférentiel (pour compatibilité)."""
     return compute_estimated_load(inter)
+
+
+# ---------------------------------------------------------------------------
+# Point d'entrée principal du dimensionnement heuristique
+# ---------------------------------------------------------------------------
+
+def compute_sizing_decision(tableau, surface=None, nb_chambres=None):
+    """
+    Point d'entrée unique pour le dimensionnement complet.
+
+    Retourne un dict structuré avec :
+      - subscription : str (abonnement conseillé)
+      - phase : str (monophasé/triphasé)
+      - profile : str (profil logement)
+      - profile_label : str
+      - justification : str
+      - ids : dict des calibres par ID
+      - power_diagnostic : dict (informatif)
+    """
+    all_circuits = []
+    for inter in tableau.values():
+        all_circuits.extend(inter.circuits)
+
+    if surface is not None and nb_chambres is not None:
+        params = extract_housing_params_from_circuits(all_circuits)
+        heuristic = estimate_subscription_residential(
+            surface=surface,
+            nb_chambres=nb_chambres,
+            has_pac=params["has_pac"],
+            has_ve=params["has_ve"],
+            has_atelier=params["has_atelier"],
+            presence_plaque=params["presence_plaque"],
+            presence_chauffe_eau=params["presence_chauffe_eau"],
+        )
+    else:
+        heuristic = heuristic_sizing_from_circuits(all_circuits)
+
+    ids = {}
+    for id_inter, inter in tableau.items():
+        ids[id_inter] = {
+            "calibre": heuristic_caliber(inter.circuits),
+            "type": inter.type,
+            "nb_circuits": len(inter.circuits),
+        }
+
+    power = compute_installed_power(all_circuits)
+
+    return {
+        "subscription": heuristic["subscription"],
+        "phase": heuristic["phase"],
+        "profile": heuristic["profile"],
+        "profile_label": heuristic["profile_label"],
+        "justification": heuristic["justification"],
+        "calibre_edf": heuristic["calibre_edf"],
+        "ids": ids,
+        "power_diagnostic": power,
+        "details": heuristic["details"],
+    }

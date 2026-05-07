@@ -15,6 +15,7 @@ from core.engine import (
     compute_total_estimated_load,
     compute_subscription_estimate,
     suggest_three_phase,
+    compute_sizing_decision,
 )
 from core.rules import regles_circuit, verifier_section_circuit, verifier_dj_circuit
 from core.labels import generer_pdf_etiquettes
@@ -219,11 +220,42 @@ with tab_saisie:
             surface = st.number_input("Surface (m²)", min_value=9, value=50, step=1)
         with col_b:
             nb_chambres = st.number_input("Chambres", min_value=0, value=2, step=1)
+        col_c, col_d, col_e = st.columns(3)
+        with col_c:
+            has_pac = st.checkbox("PAC (pompe à chaleur)")
+        with col_d:
+            has_ve = st.checkbox("Borne de recharge VE")
+        with col_e:
+            has_atelier = st.checkbox("Atelier / machines")
         if st.button("🏠 Générer logement", type="primary", use_container_width=True):
-            st.session_state.circuits = generer_circuits_logement(surface, nb_chambres)
+            circuits = generer_circuits_logement(surface, nb_chambres)
+            if has_pac:
+                circuits.append(Circuit(
+                    nom="PAC", type="specialise",
+                    section=4.0, puissance=3000,
+                    emplacement="Local technique"
+                ))
+            if has_ve:
+                circuits.append(Circuit(
+                    nom="Borne VE", type="specialise",
+                    section=6.0, puissance=7400,
+                    emplacement="Extérieur"
+                ))
+            if has_atelier:
+                circuits.append(Circuit(
+                    nom="Atelier prises", type="prise",
+                    section=2.5, puissance=3000,
+                    emplacement="Atelier"
+                ))
+            st.session_state.circuits = circuits
+            st.session_state.last_surface = surface
+            st.session_state.last_chambres = nb_chambres
+            st.session_state.last_has_pac = has_pac
+            st.session_state.last_has_ve = has_ve
+            st.session_state.last_has_atelier = has_atelier
             auto_save()
             st.session_state.tableau = None
-            st.success(f"{len(st.session_state.circuits)} circuits générés")
+            st.success(f"{len(circuits)} circuits générés")
 
 # ========================
 # ONGLET 2 : CIRCUITS
@@ -373,39 +405,69 @@ with tab_resultat:
         if tableau is None:
             st.info("Appuyez sur Calculer pour générer le tableau")
         else:
-            # Synthèse en haut
-            p_theorique = compute_total_theoretical_power(tableau)
-            p_estimee = compute_total_estimated_load(tableau)
-            abonnement = compute_subscription_estimate(p_estimee)
-            is_three_phase = suggest_three_phase(p_estimee, tableau)
+            # ========================
+            # DIMENSIONNEMENT HEURISTIQUE (décisionnel)
+            # ========================
+            surface = st.session_state.get("last_surface")
+            nb_chambres = st.session_state.get("last_chambres")
 
-            st.subheader("Synthèse")
-            col_s1, col_s2, col_s3 = st.columns(3)
-            with col_s1:
-                st.metric("Puissance théorique", f"{p_theorique} VA")
-            with col_s2:
-                st.metric("Puissance estimée", f"{p_estimee} VA")
-            with col_s3:
-                st.metric("Abonnement conseillé", abonnement)
+            sizing = compute_sizing_decision(
+                tableau,
+                surface=surface,
+                nb_chambres=nb_chambres,
+            )
 
-            if is_three_phase:
-                st.warning("🔌 Triphasé recommandé")
+            st.subheader("Dimensionnement conseillé")
+            col_h1, col_h2, col_h3 = st.columns(3)
+            with col_h1:
+                st.metric("Abonnement", f"{sizing['subscription']} {sizing['phase']}")
+            with col_h2:
+                st.metric("Profil", sizing["profile_label"])
+            with col_h3:
+                st.metric("Disjoncteur EDF", sizing["calibre_edf"])
+
+            st.info(f"Raison : {sizing['justification']}")
+
+            if sizing["phase"] == "triphasé":
+                st.warning("🔌 Alimentation triphasée recommandée")
             else:
-                if p_estimee <= 6000:
-                    st.success("✅ Monophasé 6 kVA (30A)")
-                elif p_estimee <= 9000:
-                    st.info("ℹ️ Monophasé 9 kVA (45A)")
-                elif p_estimee <= 12000:
-                    st.warning("⚡ Monophasé 12 kVA (60A)")
-                else:
-                    st.error("🔌 Triphasé à envisager")
+                st.success(f"✅ Alimentation monophasée ({sizing['subscription']})")
+
+            # ========================
+            # DÉTAILS PUISSANCE (informatif)
+            # ========================
+            with st.expander("Détails puissance (informatif — non décisionnel)"):
+                p_diag = sizing["power_diagnostic"]
+                col_p1, col_p2 = st.columns(2)
+                with col_p1:
+                    st.metric("Puissance théorique installée", f"{p_diag['total_theoretical']} VA")
+                with col_p2:
+                    st.metric("Charge estimée (foisonnement)", f"{p_diag['total_estimated']} VA")
+
+                if p_diag["details"]:
+                    st.dataframe(
+                        pd.DataFrame(p_diag["details"]),
+                        column_config={
+                            "nom": "Circuit",
+                            "puissance": "Puissance (VA)",
+                            "coeff": "Coeff",
+                            "contribution": "Estimé (VA)",
+                        },
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+                st.caption("Ces valeurs sont fournies à titre indicatif. "
+                           "Le dimensionnement réel est basé sur les heuristiques métier ci-dessus.")
 
             st.divider()
 
-            # Liste des IDs avec expanders
+            # ========================
+            # LISTE DES ID
+            # ========================
             st.subheader("Détail des ID")
             for id_inter, inter in sorted(tableau.items()):
-                cal = calibre_inter(inter)
+                cal = sizing["ids"][id_inter]["calibre"]
                 p = puissance_inter(inter)
 
                 with st.expander(f"ID {id_inter} — Type {inter.type} — {cal} — {p}VA"):
@@ -434,7 +496,6 @@ with tab_resultat:
             warnings = generate_warnings(tableau)
             reserve_info = compute_reserve_info(tableau)
 
-            # Résumé réserve
             col_r1, col_r2, col_r3 = st.columns(3)
             with col_r1:
                 st.metric("Modules DIN utilisés", reserve_info["used"])
@@ -447,7 +508,6 @@ with tab_resultat:
             if not warnings:
                 st.success("✅ Aucune alerte métier")
             else:
-                # Grouper par niveau
                 errors = [w for w in warnings if w["niveau"] == "error"]
                 warns = [w for w in warnings if w["niveau"] == "warning"]
                 infos = [w for w in warnings if w["niveau"] == "info"]
@@ -471,7 +531,6 @@ with tab_resultat:
                         ctx += f"({w['circuit']})" if w['circuit'] else ""
                         st.info(f"ℹ️ {ctx} {w['message']}")
 
-            st.divider()
             # ========================
             # GÉNÉRATION ÉTIQUETTES PDF
             # ========================
