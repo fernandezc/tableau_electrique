@@ -496,6 +496,9 @@ with tab_resultat:
         st.info("Ajoutez des circuits d'abord")
     else:
         if st.button("⚡ Calculer", type="primary", use_container_width=True):
+            for k in list(st.session_state.keys()):
+                if k.startswith("caliber_"):
+                    del st.session_state[k]
             st.session_state.tableau = generer_tableau(st.session_state.circuits)
 
         tableau = st.session_state.tableau
@@ -563,11 +566,19 @@ with tab_resultat:
             # LISTE DES ID
             # ========================
             st.subheader("Détail des ID")
+            CALIBRES_ID = ["25A", "40A", "63A", "80A", "100A"]
             for id_inter, inter in sorted(tableau.items()):
-                cal = sizing["ids"][id_inter]["calibre"]
+                auto_cal = sizing["ids"][id_inter]["calibre"]
+                cal_key = f"caliber_{id_inter}"
+                if cal_key not in st.session_state:
+                    st.session_state[cal_key] = auto_cal
+                idx = CALIBRES_ID.index(st.session_state[cal_key]) if st.session_state[cal_key] in CALIBRES_ID else CALIBRES_ID.index(auto_cal)
                 p = puissance_inter(inter)
 
-                with st.expander(f"ID {id_inter} — Type {inter.type} — {cal} — {p}VA"):
+                with st.expander(f"ID {id_inter} — Type {inter.type} — {st.session_state[cal_key]} — {p}VA"):
+                    col_cal, _ = st.columns([1, 4])
+                    with col_cal:
+                        st.selectbox("Calibre", CALIBRES_ID, index=idx, key=cal_key)
                     alertes = analyser_inter(inter)
                     for a in alertes:
                         if "🚨" in a: st.error(a)

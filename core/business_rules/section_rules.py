@@ -11,12 +11,12 @@ SECTION_MAX_DJ = {
 }
 
 PRISE_RULES = {
-    1.5: {"disj": 16, "max": 8, "puissance": 2000, "label": "Prises 1.5mm²"},
-    2.5: {"disj": 20, "max": 12, "puissance": 3000, "label": "Prises 2.5mm²"},
+    1.5: {"disj": 16, "max": 8,   "puissance": 2000, "label": "Prises 1.5mm²"},
+    2.5: {"disj": 16, "max": 12,  "puissance": 3000, "label": "Prises 2.5mm²"},
 }
 
 ECLAIRAGE_RULES = {
-    "disj": 16, "max": 8, "puissance": 1000, "label": "Éclairage",
+    "disj": 10, "max": 8, "puissance": 1000, "label": "Éclairage",
 }
 
 SPECIALISE_REQUIREMENTS = {

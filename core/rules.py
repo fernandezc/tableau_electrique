@@ -80,16 +80,10 @@ def validate_section_vs_breaker(circuit):
         })
 
     if circuit.dj_existant and circuit.dj_existant > 0:
-        if circuit.dj_existant > dj_conseille:
+        if section in SECTION_MAX_DJ and circuit.dj_existant > SECTION_MAX_DJ[section]:
             alertes.append({
                 "niveau": "warning",
-                "message": f"DJ surdimensionné : {circuit.dj_existant}A (conseillé {dj_conseille}A)",
-                "circuit": circuit.nom,
-            })
-        elif circuit.dj_existant < dj_conseille:
-            alertes.append({
-                "niveau": "info",
-                "message": f"DJ sous-dimensionné : {circuit.dj_existant}A (conseillé {dj_conseille}A)",
+                "message": f"DJ surdimensionné : {circuit.dj_existant}A pour section {section}mm² (max {SECTION_MAX_DJ[section]}A)",
                 "circuit": circuit.nom,
             })
 
@@ -171,13 +165,10 @@ def verifier_dj_circuit(circuit):
     if circuit.dj_existant is None or circuit.dj_existant == 0:
         return alertes
 
-    regle = regles_circuit(circuit)
-    dj_conseille = regle["disj"]
+    section = circuit.section
     dj_actuel = circuit.dj_existant
 
-    if dj_actuel > dj_conseille:
-        alertes.append(f"⚠️ DJ surdimensionné : {dj_actuel}A (conseillé {dj_conseille}A)")
-    elif dj_actuel < dj_conseille:
-        alertes.append(f"ℹ️ DJ sous-dimensionné : {dj_actuel}A (conseillé {dj_conseille}A)")
+    if section in SECTION_MAX_DJ and dj_actuel > SECTION_MAX_DJ[section]:
+        alertes.append(f"⚠️ DJ surdimensionné : {dj_actuel}A pour section {section}mm² (max {SECTION_MAX_DJ[section]}A)")
 
     return alertes

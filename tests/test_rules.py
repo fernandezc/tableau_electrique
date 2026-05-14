@@ -22,13 +22,13 @@ class TestReglesCircuit:
 
     def test_prise_2_5(self):
         r = regles_circuit(make_circuit("Test", "prise", 2.5))
-        assert r["disj"] == 20
+        assert r["disj"] == 16
         assert r["max"] == 12
         assert r["puissance"] == 3000
 
     def test_eclairage(self):
         r = regles_circuit(make_circuit("Test", "eclairage", 1.5))
-        assert r["disj"] == 16
+        assert r["disj"] == 10
         assert r["puissance"] == 1000
 
     def test_plaque_cuisson(self):
@@ -49,7 +49,7 @@ class TestReglesCircuit:
 
     def test_dict_input(self):
         r = regles_circuit({"nom": "Test", "type": "prise", "section": 2.5})
-        assert r["disj"] == 20
+        assert r["disj"] == 16
 
 
 class TestSectionVersDJ:
