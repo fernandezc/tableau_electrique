@@ -309,7 +309,7 @@ with tab_saisie:
                         existant=existant, id_diff=id_diff if existant else None,
                     )
 
-                idx = next((i for i, c in enumerate(st.session_state.circuits) if c.nom.lower() == nom.lower()), None)
+                idx = next((i for i, c in enumerate(st.session_state.circuits) if c.nom.lower() == nom.lower() and c.emplacement == emplacement), None)
                 if idx is not None:
                     st.session_state["pending_circuit"] = nouveau
                     st.session_state["pending_idx"] = idx
@@ -327,7 +327,7 @@ with tab_saisie:
         # Confirmation doublon
         if st.session_state.get("show_confirm"):
             pending = st.session_state["pending_circuit"]
-            st.warning(f"⚠️ '{pending.nom}' existe déjà. Remplacer ?")
+            st.warning(f"⚠️ '{pending.nom}' [{pending.emplacement}] existe déjà. Remplacer ?")
             col_ok, col_ann = st.columns(2)
             with col_ok:
                 if st.button("✅ Oui", key="btn_replace", use_container_width=True):
@@ -488,7 +488,8 @@ with tab_circuits:
 
             statut = "✅" if not alertes else ("❌" if any("❌" in a for a in alertes) else "⚠️")
 
-            with st.expander(f"{statut} {c.nom} — DJ {regle['disj']}A | {regle['puissance']}VA{nb_label}"):
+            loc = f" [{c.emplacement}]" if c.emplacement else ""
+            with st.expander(f"{statut} {c.nom}{loc} — DJ {regle['disj']}A | {regle['puissance']}VA{nb_label}"):
                 col_d1, col_d2 = st.columns(2)
                 with col_d1:
                     st.write(f"**Type :** {c.type}  |  **Section :** {c.section}mm²")
