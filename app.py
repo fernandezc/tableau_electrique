@@ -212,6 +212,42 @@ with st.sidebar:
 
     st.caption(f"ID #{st.session_state.current_project_id}")
 
+    st.divider()
+    st.caption("💾 Sauvegarde")
+
+    # Export
+    projects_data = []
+    for pid, pname, _ in projects:
+        circs, meta, _ = load_project(pid)
+        projects_data.append({
+            "id": pid,
+            "name": pname,
+            "circuits": [vars(c) for c in circs],
+            "metadata": meta,
+        })
+    export_json = json.dumps(projects_data, ensure_ascii=False, indent=2, default=str)
+    st.download_button(
+        "📥 Exporter projets",
+        data=export_json,
+        file_name="tableau_elect_backup.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    # Import
+    uploaded = st.file_uploader("📥 Importer projets", type="json", label_visibility="collapsed")
+    if uploaded is not None:
+        try:
+            imported = json.loads(uploaded.read().decode("utf-8"))
+            for proj in imported:
+                pid = create_project(proj["name"])
+                circuits = [Circuit(**c) for c in proj["circuits"]]
+                save_project(pid, circuits, metadata=proj.get("metadata"))
+            st.success(f"{len(imported)} projet(s) importé(s)")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erreur d'import : {e}")
+
 st.title("⚡ Tableau électrique NF C 15-100")
 
 # ========================
