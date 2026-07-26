@@ -18,11 +18,12 @@ from core.engine import (
     compute_sizing_decision,
 )
 from core.rules import regles_circuit, verifier_section_circuit, verifier_dj_circuit
-from core.labels import generer_pdf_etiquettes
+from core.labels import generer_pdf_etiquettes_bytes
 from core.database import (
     init_db, lister_projets, load_project, save_project,
     create_project, delete_project, rename_project,
 )
+from core.import_export import normalize_imported_projects
 import json
 import os
 
@@ -44,29 +45,23 @@ if "current_project_id" not in st.session_state:
         if os.path.exists(legacy):
             try:
                 with open(legacy) as f:
-                    data = json.load(f)
-                if isinstance(data, list):
-                    circuits_data = data
-                    meta = {}
-                else:
-                    circuits_data = data.get("circuits", [])
-                    meta = data.get("metadata", {})
-                circuits = [Circuit(**c) for c in circuits_data]
-                pid = create_project("circuits.json (importé)")
-                save_project(pid, circuits, metadata={
-                    "surface": meta.get("surface"),
-                    "chambres": meta.get("chambres"),
-                    "has_pac": meta.get("has_pac", False),
-                    "has_ve": meta.get("has_ve", False),
-                    "has_atelier": meta.get("has_atelier", False),
-                })
-                st.session_state.current_project_id = pid
-                st.session_state.circuits = circuits
-                for k in ("surface", "chambres"):
-                    if k in meta:
-                        st.session_state[f"last_{k}"] = meta[k]
-                for k in ("has_pac", "has_ve", "has_atelier"):
-                    st.session_state[f"last_{k}"] = meta.get(k, False)
+                    imported_projects = normalize_imported_projects(
+                        json.load(f),
+                        default_name="circuits.json (importé)",
+                    )
+                if imported_projects:
+                    project = imported_projects[0]
+                    circuits = [Circuit(**c) for c in project["circuits"]]
+                    pid = create_project(project["name"])
+                    save_project(pid, circuits, metadata=project.get("metadata") or {})
+                    st.session_state.current_project_id = pid
+                    st.session_state.circuits = circuits
+                    meta = project.get("metadata") or {}
+                    for k in ("surface", "chambres"):
+                        if k in meta:
+                            st.session_state[f"last_{k}"] = meta[k]
+                    for k in ("has_pac", "has_ve", "has_atelier"):
+                        st.session_state[f"last_{k}"] = meta.get(k, False)
             except Exception:
                 pass
         if "current_project_id" not in st.session_state:
@@ -89,6 +84,9 @@ if "circuits" not in st.session_state:
 if "tableau" not in st.session_state:
     st.session_state.tableau = None
 
+if "import_uploader_key" not in st.session_state:
+    st.session_state.import_uploader_key = 0
+
 if "project_name" not in st.session_state:
     projects = lister_projets()
     for p in projects:
@@ -97,18 +95,43 @@ if "project_name" not in st.session_state:
             break
 
 
+META_STATE_KEYS = ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier")
+PDF_STATE_KEYS = ("labels_pdf_bytes", "labels_pdf_name")
+
+
+def clear_generated_pdf():
+    for key in PDF_STATE_KEYS:
+        st.session_state.pop(key, None)
+
+
+def clear_caliber_state():
+    for key in list(st.session_state.keys()):
+        if key.startswith("caliber_"):
+            del st.session_state[key]
+
+
+def clear_project_metadata_state():
+    for key in META_STATE_KEYS:
+        st.session_state.pop(key, None)
+
+
+def clear_derived_state():
+    st.session_state.tableau = None
+    clear_generated_pdf()
+    clear_caliber_state()
+
+
 def auto_save():
     """Sauvegarde automatique dans le projet courant."""
-    if st.session_state.circuits:
-        meta = {}
-        for k in ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier"):
-            if k in st.session_state and st.session_state[k] is not None:
-                meta[k.replace("last_", "", 1)] = st.session_state[k]
-        save_project(
-            st.session_state.current_project_id,
-            st.session_state.circuits,
-            metadata=meta or None,
-        )
+    meta = {}
+    for k in META_STATE_KEYS:
+        if k in st.session_state and st.session_state[k] is not None:
+            meta[k.replace("last_", "", 1)] = st.session_state[k]
+    save_project(
+        st.session_state.current_project_id,
+        st.session_state.circuits,
+        metadata=meta,
+    )
 
 
 def _load_project_into_state(pid):
@@ -116,9 +139,8 @@ def _load_project_into_state(pid):
     st.session_state.circuits = circuits
     st.session_state.current_project_id = pid
     st.session_state.project_name = name
-    st.session_state.tableau = None
-    for k in ("last_surface", "last_chambres", "last_has_pac", "last_has_ve", "last_has_atelier"):
-        st.session_state.pop(k, None)
+    clear_derived_state()
+    clear_project_metadata_state()
     if meta.get("surface") is not None:
         st.session_state.last_surface = meta["surface"]
         st.session_state.last_chambres = meta["chambres"]
@@ -160,7 +182,8 @@ with st.sidebar:
             st.session_state.circuits = []
             st.session_state.current_project_id = pid
             st.session_state.project_name = "Nouveau projet"
-            st.session_state.tableau = None
+            clear_project_metadata_state()
+            clear_derived_state()
             st.rerun()
     with col_del:
         if st.button("🗑️ Suppr.", use_container_width=True):
@@ -182,6 +205,8 @@ with st.sidebar:
                     st.session_state.circuits = []
                     st.session_state.current_project_id = pid
                     st.session_state.project_name = "Projet 1"
+                    clear_project_metadata_state()
+                    clear_derived_state()
                 del st.session_state["confirm_delete"]
                 st.rerun()
         with c_no:
@@ -235,16 +260,31 @@ with st.sidebar:
     )
 
     # Import
-    uploaded = st.file_uploader("📥 Importer projets", type="json", label_visibility="collapsed")
+    uploaded = st.file_uploader(
+        "📥 Importer projets",
+        type="json",
+        label_visibility="collapsed",
+        key=f"import_projects_{st.session_state.import_uploader_key}",
+    )
     if uploaded is not None:
         try:
-            imported = json.loads(uploaded.read().decode("utf-8"))
-            for proj in imported:
-                pid = create_project(proj["name"])
-                circuits = [Circuit(**c) for c in proj["circuits"]]
-                save_project(pid, circuits, metadata=proj.get("metadata"))
-            st.success(f"{len(imported)} projet(s) importé(s)")
-            st.rerun()
+            imported = normalize_imported_projects(
+                json.loads(uploaded.getvalue().decode("utf-8")),
+                default_name=os.path.splitext(uploaded.name)[0] or "Projet importé",
+            )
+            if not imported:
+                st.warning("Le fichier ne contient aucun projet à importer")
+            else:
+                created_ids = []
+                for proj in imported:
+                    pid = create_project(proj["name"])
+                    circuits = [Circuit(**c) for c in proj["circuits"]]
+                    save_project(pid, circuits, metadata=proj.get("metadata") or {})
+                    created_ids.append(pid)
+                _load_project_into_state(created_ids[-1])
+                st.session_state.import_uploader_key += 1
+                st.success(f"{len(imported)} projet(s) importé(s)")
+                st.rerun()
         except Exception as e:
             st.error(f"Erreur d'import : {e}")
 
@@ -322,7 +362,7 @@ with tab_saisie:
                     st.session_state.circuits.append(nouveau)
                     auto_save()
                     st.success(f"'{nom}' ajouté")
-                    st.session_state.tableau = None
+                    clear_derived_state()
 
         # Confirmation doublon
         if st.session_state.get("show_confirm"):
@@ -339,7 +379,7 @@ with tab_saisie:
                     st.success("Remplacé")
                     del st.session_state["pending_circuit"]; del st.session_state["pending_idx"]
                     del st.session_state["show_confirm"]
-                    st.session_state.tableau = None
+                    clear_derived_state()
                     st.rerun()
             with col_ann:
                 if st.button("❌ Non", key="btn_cancel", use_container_width=True):
@@ -387,7 +427,7 @@ with tab_saisie:
             st.session_state.last_has_ve = has_ve
             st.session_state.last_has_atelier = has_atelier
             auto_save()
-            st.session_state.tableau = None
+            clear_derived_state()
             st.success(f"{len(circuits)} circuits générés")
 
 # ========================
@@ -418,7 +458,7 @@ with tab_circuits:
                     e_emplacement = st.text_input("Emplacement", value=c.emplacement, key="edit_emplacement")
                     e_existant = st.checkbox("Circuit existant", value=c.existant, key="edit_existant")
                     e_id_diff = st.number_input("ID différentiel", min_value=1, value=c.id_diff or 1,
-                                                disabled=not c.existant, key="edit_id_diff")
+                                                disabled=not e_existant, key="edit_id_diff")
                     e_dj = st.number_input("DJ existant (A)", min_value=0, value=c.dj_existant or 0,
                                            key="edit_dj")
                     if e_type in ("prise", "eclairage"):
@@ -459,7 +499,7 @@ with tab_circuits:
                             else: st.warning(a)
                         auto_save()
                         del st.session_state["edit_idx"]
-                        st.session_state.tableau = None
+                        clear_derived_state()
                         st.rerun()
                 with col_cancel:
                     if st.button("❌ Annuler", use_container_width=True):
@@ -516,13 +556,13 @@ with tab_circuits:
                     if st.button("🗑️ Supprimer", key=f"del_{i}", use_container_width=True):
                         st.session_state.circuits.pop(i)
                         auto_save()
-                        st.session_state.tableau = None
+                        clear_derived_state()
                         st.rerun()
 
         if st.button("🗑️ Tout supprimer", type="primary", use_container_width=True):
             st.session_state.circuits = []
             auto_save()
-            st.session_state.tableau = None
+            clear_derived_state()
             st.rerun()
 
 # ========================
@@ -533,9 +573,8 @@ with tab_resultat:
         st.info("Ajoutez des circuits d'abord")
     else:
         if st.button("⚡ Calculer", type="primary", use_container_width=True):
-            for k in list(st.session_state.keys()):
-                if k.startswith("caliber_"):
-                    del st.session_state[k]
+            clear_caliber_state()
+            clear_generated_pdf()
             st.session_state.tableau = generer_tableau(st.session_state.circuits)
 
         tableau = st.session_state.tableau
@@ -683,17 +722,20 @@ with tab_resultat:
             st.subheader("🏷️ Étiquettes")
             if st.button("🖨️ Générer étiquettes PDF", use_container_width=True):
                 try:
-                    pdf_file = generer_pdf_etiquettes(tableau)
-                    with open(pdf_file, "rb") as f:
-                        st.download_button(
-                            label="📥 Télécharger le PDF",
-                            data=f,
-                            file_name=pdf_file,
-                            mime="application/pdf",
-                            use_container_width=True,
-                        )
+                    safe_name = "_".join(st.session_state.project_name.split()) or "projet"
+                    st.session_state.labels_pdf_bytes = generer_pdf_etiquettes_bytes(tableau)
+                    st.session_state.labels_pdf_name = f"etiquettes_{safe_name}.pdf"
                     st.success("PDF généré avec succès")
                 except ImportError:
                     st.error("reportlab requis : pip install reportlab")
                 except Exception as e:
                     st.error(f"Erreur : {e}")
+
+            if st.session_state.get("labels_pdf_bytes"):
+                st.download_button(
+                    label="📥 Télécharger le PDF",
+                    data=st.session_state["labels_pdf_bytes"],
+                    file_name=st.session_state.get("labels_pdf_name", "etiquettes.pdf"),
+                    mime="application/pdf",
+                    use_container_width=True,
+                )

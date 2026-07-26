@@ -1,5 +1,6 @@
 import unicodedata
 import os
+from io import BytesIO
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.pagesizes import A4
@@ -194,8 +195,8 @@ def _inter_cell(inter):
     return cell
 
 
-def generer_pdf_etiquettes(tableau, filename="etiquettes.pdf"):
-    doc = SimpleDocTemplate(filename, pagesize=A4,
+def _build_pdf_etiquettes(tableau, target):
+    doc = SimpleDocTemplate(target, pagesize=A4,
                             topMargin=10*mm, bottomMargin=10*mm,
                             leftMargin=10*mm, rightMargin=10*mm)
     elements = []
@@ -219,4 +220,14 @@ def generer_pdf_etiquettes(tableau, filename="etiquettes.pdf"):
         elements.append(t)
         elements.append(Spacer(1, 2*mm))
     doc.build(elements)
+
+
+def generer_pdf_etiquettes(tableau, filename="etiquettes.pdf"):
+    _build_pdf_etiquettes(tableau, filename)
     return filename
+
+
+def generer_pdf_etiquettes_bytes(tableau):
+    buffer = BytesIO()
+    _build_pdf_etiquettes(tableau, buffer)
+    return buffer.getvalue()

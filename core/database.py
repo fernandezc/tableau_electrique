@@ -69,7 +69,7 @@ def save_project(project_id, circuits, name=None, metadata=None):
             "UPDATE projects SET circuits = ?, updated_at = datetime('now') WHERE id = ?",
             (circuits_json, project_id),
         )
-    if metadata:
+    if metadata is not None:
         conn.execute(
             """UPDATE projects SET surface = ?, chambres = ?, has_pac = ?, has_ve = ?, has_atelier = ?
                WHERE id = ?""",
