@@ -143,10 +143,10 @@ def _circuit_cell(c):
     nom_lines = wrap_text_by_width(c.nom.upper(), _FONT, 7, avail)
     nom_content = Paragraph("<b>" + "<br/>".join(nom_lines) + "</b>", style_nom)
     if c.emplacement:
-        style_empl = ParagraphStyle("e", alignment=TA_CENTER, fontSize=5.2, leading=6,
-                                    fontName=_FONT, textColor=colors.HexColor("#777777"))
-        empl_lines = wrap_text_by_width(c.emplacement.upper(), _FONT, 5.2, avail)
-        empl_content = Paragraph("<br/>".join(empl_lines), style_empl)
+        style_empl = ParagraphStyle("e", alignment=TA_CENTER, fontSize=5.8, leading=6.2,
+                                    fontName=_FONT, textColor=colors.HexColor("#666666"))
+        empl_lines = wrap_text_by_width(c.emplacement.upper(), _FONT, 5.8, avail)
+        empl_content = Paragraph("<b>" + "<br/>".join(empl_lines) + "</b>", style_empl)
     else:
         empl_content = ""
     cell = Table(
