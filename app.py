@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from html import escape
 from core.models import Circuit
 from core.engine import (
     generer_tableau,
@@ -87,6 +88,9 @@ if "tableau" not in st.session_state:
 if "import_uploader_key" not in st.session_state:
     st.session_state.import_uploader_key = 0
 
+if "project_selector_key" not in st.session_state:
+    st.session_state.project_selector_key = 0
+
 if "project_name" not in st.session_state:
     projects = lister_projets()
     for p in projects:
@@ -121,6 +125,10 @@ def clear_derived_state():
     clear_caliber_state()
 
 
+def refresh_project_selector():
+    st.session_state.project_selector_key += 1
+
+
 def auto_save():
     """Sauvegarde automatique dans le projet courant."""
     meta = {}
@@ -139,6 +147,7 @@ def _load_project_into_state(pid):
     st.session_state.circuits = circuits
     st.session_state.current_project_id = pid
     st.session_state.project_name = name
+    refresh_project_selector()
     clear_derived_state()
     clear_project_metadata_state()
     if meta.get("surface") is not None:
@@ -147,6 +156,124 @@ def _load_project_into_state(pid):
         st.session_state.last_has_pac = meta.get("has_pac", False)
         st.session_state.last_has_ve = meta.get("has_ve", False)
         st.session_state.last_has_atelier = meta.get("has_atelier", False)
+
+
+def persist_tableau_line_assignments(tableau, renumber=False):
+    id_map = {}
+    sorted_ids = sorted(tableau)
+    for idx, id_inter in enumerate(sorted_ids, start=1):
+        id_map[id_inter] = idx if renumber else id_inter
+
+    for id_inter, inter in tableau.items():
+        target_id = id_map[id_inter]
+        for circuit in inter.circuits:
+            circuit.id_diff = target_id
+
+    auto_save()
+    clear_generated_pdf()
+    st.session_state.tableau = generer_tableau(st.session_state.circuits)
+
+
+def recalculate_tableau_and_persist():
+    clear_caliber_state()
+    clear_generated_pdf()
+    st.session_state.tableau = generer_tableau(st.session_state.circuits)
+    persist_tableau_line_assignments(st.session_state.tableau)
+
+
+def render_labels_preview(tableau):
+    rows = []
+    for id_inter, inter in sorted(tableau.items()):
+        if not inter.circuits:
+            continue
+
+        cells = [
+            (
+                '<div class="label-cell label-id">'
+                f'<div class="label-id-title">ID {escape(str(inter.id))}</div>'
+                f'<div class="label-id-type">TYPE {escape(inter.type.upper())}</div>'
+                '</div>'
+            )
+        ]
+
+        for circuit in inter.circuits:
+            emplacement_html = ""
+            if circuit.emplacement:
+                emplacement_html = (
+                    f'<div class="label-emplacement">{escape(circuit.emplacement.upper())}</div>'
+                )
+
+            cells.append(
+                '<div class="label-cell label-circuit">'
+                f'<div class="label-nom">{escape(circuit.nom.upper())}</div>'
+                f'{emplacement_html}'
+                '</div>'
+            )
+
+        rows.append(
+            '<div class="label-row">' + "".join(cells) + '</div>'
+        )
+
+    preview_html = """
+    <style>
+    .labels-preview {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-top: 0.5rem;
+    }
+    .label-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+    }
+    .label-cell {
+        width: 110px;
+        min-height: 86px;
+        border: 1px solid #333;
+        margin-right: -1px;
+        margin-bottom: -1px;
+        padding: 0.45rem 0.4rem;
+        background: #fff;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+    }
+    .label-id {
+        width: 138px;
+        background: #f3f3f3;
+    }
+    .label-id-title {
+        font-weight: 700;
+        font-size: 1rem;
+        line-height: 1.2;
+    }
+    .label-id-type {
+        margin-top: 0.3rem;
+        color: #666;
+        font-size: 0.78rem;
+        line-height: 1.2;
+    }
+    .label-nom {
+        font-weight: 700;
+        font-size: 0.8rem;
+        line-height: 1.2;
+        word-break: break-word;
+    }
+    .label-emplacement {
+        margin-top: 0.35rem;
+        color: #666;
+        font-size: 0.68rem;
+        font-weight: 600;
+        line-height: 1.2;
+        word-break: break-word;
+    }
+    </style>
+    """
+
+    return preview_html + '<div class="labels-preview">' + "".join(rows) + '</div>'
 
 
 # ========================
@@ -169,7 +296,7 @@ with st.sidebar:
             projects,
             format_func=lambda p: p[1],
             index=current_idx,
-            key="project_selector",
+            key=f"project_selector_{st.session_state.project_selector_key}",
         )
         if selected[0] != st.session_state.current_project_id:
             _load_project_into_state(selected[0])
@@ -179,11 +306,7 @@ with st.sidebar:
     with col_new:
         if st.button("🆕 Nouveau", use_container_width=True):
             pid = create_project("Nouveau projet")
-            st.session_state.circuits = []
-            st.session_state.current_project_id = pid
-            st.session_state.project_name = "Nouveau projet"
-            clear_project_metadata_state()
-            clear_derived_state()
+            _load_project_into_state(pid)
             st.rerun()
     with col_del:
         if st.button("🗑️ Suppr.", use_container_width=True):
@@ -214,8 +337,6 @@ with st.sidebar:
                 del st.session_state["confirm_delete"]
                 st.rerun()
 
-    st.caption(f"Projet : {st.session_state.project_name}")
-
     if st.button("✏️ Renommer", use_container_width=True):
         st.session_state.show_rename = True
         st.rerun()
@@ -228,6 +349,7 @@ with st.sidebar:
                 if new_name.strip():
                     rename_project(st.session_state.current_project_id, new_name.strip())
                     st.session_state.project_name = new_name.strip()
+                    refresh_project_selector()
                 st.session_state.show_rename = False
                 st.rerun()
         with c_cancel:
@@ -275,15 +397,30 @@ with st.sidebar:
             if not imported:
                 st.warning("Le fichier ne contient aucun projet à importer")
             else:
-                created_ids = []
+                created_projects = []
+                total_circuits = 0
                 for proj in imported:
-                    pid = create_project(proj["name"])
                     circuits = [Circuit(**c) for c in proj["circuits"]]
+                    pid = create_project(proj["name"])
                     save_project(pid, circuits, metadata=proj.get("metadata") or {})
-                    created_ids.append(pid)
-                _load_project_into_state(created_ids[-1])
+                    created_projects.append({
+                        "id": pid,
+                        "name": proj["name"],
+                        "count": len(circuits),
+                    })
+                    total_circuits += len(circuits)
+
+                selected_project = max(created_projects, key=lambda project: (project["count"], project["id"]))
+                _load_project_into_state(selected_project["id"])
                 st.session_state.import_uploader_key += 1
-                st.success(f"{len(imported)} projet(s) importé(s)")
+
+                if total_circuits == 0:
+                    st.warning(f"{len(created_projects)} projet(s) importé(s), mais aucun circuit n'a été trouvé dans le fichier.")
+                else:
+                    st.success(
+                        f"{len(created_projects)} projet(s) importé(s), {total_circuits} circuit(s) chargés. "
+                        f"Projet ouvert : {selected_project['name']} ({selected_project['count']} circuit(s))."
+                    )
                 st.rerun()
         except Exception as e:
             st.error(f"Erreur d'import : {e}")
@@ -311,7 +448,15 @@ with tab_saisie:
         with col_f2:
             emplacement = st.text_input("Emplacement", placeholder="ex: Cuisine, Chambre 1…", key="form_emplacement")
             existant = st.checkbox("Circuit existant", key="form_existant")
-            id_diff = st.number_input("ID différentiel", min_value=1, step=1, key="form_id") if existant else None
+            affecter_ligne = st.checkbox("Affecter à une ligne", key="form_assign_line")
+            id_diff = st.number_input(
+                "Ligne / ID différentiel",
+                min_value=1,
+                step=1,
+                value=1,
+                disabled=not affecter_ligne,
+                key="form_id",
+            )
             dj_existant = st.number_input("DJ existant (A)", min_value=0, value=0, step=1,
                                           help="0 = inconnu / non applicable")
             if type_c == "specialise":
@@ -338,7 +483,7 @@ with tab_saisie:
                         emplacement=emplacement,
                         nb_max=nb_max_ref, nb_reel=nb_reel,
                         dj_existant=dj_existant if dj_existant > 0 else None,
-                        existant=existant, id_diff=id_diff if existant else None,
+                        existant=existant, id_diff=id_diff if affecter_ligne else None,
                     )
                 else:
                     nouveau = Circuit(
@@ -346,7 +491,7 @@ with tab_saisie:
                         puissance=puissance_custom,
                         emplacement=emplacement,
                         dj_existant=dj_existant if dj_existant > 0 else None,
-                        existant=existant, id_diff=id_diff if existant else None,
+                        existant=existant, id_diff=id_diff if affecter_ligne else None,
                     )
 
                 idx = next((i for i, c in enumerate(st.session_state.circuits) if c.nom.lower() == nom.lower() and c.emplacement == emplacement), None)
@@ -457,8 +602,18 @@ with tab_circuits:
                 with col_e2:
                     e_emplacement = st.text_input("Emplacement", value=c.emplacement, key="edit_emplacement")
                     e_existant = st.checkbox("Circuit existant", value=c.existant, key="edit_existant")
-                    e_id_diff = st.number_input("ID différentiel", min_value=1, value=c.id_diff or 1,
-                                                disabled=not e_existant, key="edit_id_diff")
+                    e_affecter_ligne = st.checkbox(
+                        "Affecter à une ligne",
+                        value=c.id_diff is not None,
+                        key="edit_assign_line",
+                    )
+                    e_id_diff = st.number_input(
+                        "Ligne / ID différentiel",
+                        min_value=1,
+                        value=c.id_diff or 1,
+                        disabled=not e_affecter_ligne,
+                        key="edit_id_diff",
+                    )
                     e_dj = st.number_input("DJ existant (A)", min_value=0, value=c.dj_existant or 0,
                                            key="edit_dj")
                     if e_type in ("prise", "eclairage"):
@@ -482,7 +637,7 @@ with tab_circuits:
                                 emplacement=e_emplacement,
                                 nb_max=e_nb_max, nb_reel=e_nb_reel,
                                 dj_existant=e_dj if e_dj > 0 else None,
-                                existant=e_existant, id_diff=e_id_diff if e_existant else None,
+                                existant=e_existant, id_diff=e_id_diff if e_affecter_ligne else None,
                             )
                         else:
                             st.session_state.circuits[edit_idx] = Circuit(
@@ -490,7 +645,7 @@ with tab_circuits:
                                 puissance=e_puissance,
                                 emplacement=e_emplacement,
                                 dj_existant=e_dj if e_dj > 0 else None,
-                                existant=e_existant, id_diff=e_id_diff if e_existant else None,
+                                existant=e_existant, id_diff=e_id_diff if e_affecter_ligne else None,
                             )
                         alertes = verifier_section_circuit(st.session_state.circuits[edit_idx]) + \
                                   verifier_dj_circuit(st.session_state.circuits[edit_idx])
@@ -534,6 +689,8 @@ with tab_circuits:
                 with col_d1:
                     st.write(f"**Type :** {c.type}  |  **Section :** {c.section}mm²")
                     st.write(f"**DJ conseillé :** {regle['disj']}A{dj_label}")
+                    if c.id_diff is not None:
+                        st.write(f"**Ligne souhaitée :** ID {c.id_diff}")
                     if c.emplacement:
                         st.write(f"**Emplacement :** {c.emplacement}")
                     st.write(f"**Puissance :** {regle['puissance']}VA")
@@ -547,10 +704,21 @@ with tab_circuits:
                         if "❌" in a: st.error(a)
                         else: st.warning(a)
 
-                col_edit, col_del = st.columns(2)
+                col_edit, col_move, col_del = st.columns(3)
                 with col_edit:
                     if st.button("✏️ Modifier", key=f"edit_{i}", use_container_width=True):
                         st.session_state["edit_idx"] = i
+                        st.rerun()
+                with col_move:
+                    if st.button("↪️ Nouvelle ligne", key=f"new_line_{i}", use_container_width=True):
+                        next_id = max(
+                            (circuit.id_diff or 0 for circuit in st.session_state.circuits),
+                            default=0,
+                        ) + 1
+                        st.session_state.circuits[i].id_diff = next_id
+                        auto_save()
+                        recalculate_tableau_and_persist()
+                        st.success(f"'{c.nom}' déplacé vers la ligne {next_id}.")
                         st.rerun()
                 with col_del:
                     if st.button("🗑️ Supprimer", key=f"del_{i}", use_container_width=True):
@@ -573,9 +741,7 @@ with tab_resultat:
         st.info("Ajoutez des circuits d'abord")
     else:
         if st.button("⚡ Calculer", type="primary", use_container_width=True):
-            clear_caliber_state()
-            clear_generated_pdf()
-            st.session_state.tableau = generer_tableau(st.session_state.circuits)
+            recalculate_tableau_and_persist()
 
         tableau = st.session_state.tableau
         if tableau is None:
@@ -642,6 +808,17 @@ with tab_resultat:
             # LISTE DES ID
             # ========================
             st.subheader("Détail des ID")
+            col_line_1, col_line_2 = st.columns(2)
+            with col_line_1:
+                if st.button("🔢 Renuméroter les lignes", use_container_width=True):
+                    persist_tableau_line_assignments(tableau, renumber=True)
+                    st.success("Les lignes ont été renumérotées.")
+                    st.rerun()
+            with col_line_2:
+                if st.button("🧷 Figer la répartition actuelle", use_container_width=True):
+                    persist_tableau_line_assignments(tableau)
+                    st.success("La répartition actuelle a été conservée.")
+                    st.rerun()
             CALIBRES_ID = ["25A", "40A", "63A", "80A", "100A"]
             for id_inter, inter in sorted(tableau.items()):
                 auto_cal = sizing["ids"][id_inter]["calibre"]
@@ -720,22 +897,29 @@ with tab_resultat:
             # ========================
             st.divider()
             st.subheader("🏷️ Étiquettes")
-            if st.button("🖨️ Générer étiquettes PDF", use_container_width=True):
-                try:
-                    safe_name = "_".join(st.session_state.project_name.split()) or "projet"
-                    st.session_state.labels_pdf_bytes = generer_pdf_etiquettes_bytes(tableau)
-                    st.session_state.labels_pdf_name = f"etiquettes_{safe_name}.pdf"
-                    st.success("PDF généré avec succès")
-                except ImportError:
-                    st.error("reportlab requis : pip install reportlab")
-                except Exception as e:
-                    st.error(f"Erreur : {e}")
+            tab_preview, tab_pdf = st.tabs(["👁️ Aperçu HTML", "📄 PDF"])
 
-            if st.session_state.get("labels_pdf_bytes"):
-                st.download_button(
-                    label="📥 Télécharger le PDF",
-                    data=st.session_state["labels_pdf_bytes"],
-                    file_name=st.session_state.get("labels_pdf_name", "etiquettes.pdf"),
-                    mime="application/pdf",
-                    use_container_width=True,
-                )
+            with tab_preview:
+                st.caption("Aperçu rapide des étiquettes sans téléchargement.")
+                st.markdown(render_labels_preview(tableau), unsafe_allow_html=True)
+
+            with tab_pdf:
+                if st.button("🖨️ Générer étiquettes PDF", use_container_width=True):
+                    try:
+                        safe_name = "_".join(st.session_state.project_name.split()) or "projet"
+                        st.session_state.labels_pdf_bytes = generer_pdf_etiquettes_bytes(tableau)
+                        st.session_state.labels_pdf_name = f"etiquettes_{safe_name}.pdf"
+                        st.success("PDF généré avec succès")
+                    except ImportError:
+                        st.error("reportlab requis : pip install reportlab")
+                    except Exception as e:
+                        st.error(f"Erreur : {e}")
+
+                if st.session_state.get("labels_pdf_bytes"):
+                    st.download_button(
+                        label="📥 Télécharger le PDF",
+                        data=st.session_state["labels_pdf_bytes"],
+                        file_name=st.session_state.get("labels_pdf_name", "etiquettes.pdf"),
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )

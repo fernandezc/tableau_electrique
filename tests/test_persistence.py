@@ -1,4 +1,5 @@
 from core import database
+from core.engine import generer_tableau
 from core.import_export import normalize_imported_projects
 from core.labels import generer_pdf_etiquettes_bytes
 from tests.helpers import make_circuit, make_inter, make_tableau
@@ -75,3 +76,31 @@ def test_generer_pdf_etiquettes_bytes_returns_pdf_bytes():
 
     assert pdf_data.startswith(b"%PDF")
     assert len(pdf_data) > 100
+
+
+def test_normalize_imported_projects_preserves_multi_project_backup_order():
+    payload = [
+        {"name": "Projet vide", "circuits": [], "metadata": {}},
+        {
+            "name": "Maison",
+            "circuits": [{"nom": "Prises séjour", "type": "prise", "section": 2.5}],
+            "metadata": {"surface": 90},
+        },
+    ]
+
+    projects = normalize_imported_projects(payload)
+
+    assert [project["name"] for project in projects] == ["Projet vide", "Maison"]
+    assert [len(project["circuits"]) for project in projects] == [0, 1]
+
+
+def test_generer_tableau_preserves_manual_line_assignment_for_any_circuit():
+    circuits = [
+        make_circuit("Plaque cuisson", "specialise", 6.0, puissance=7000, id_diff=3),
+        make_circuit("Éclairage séjour", "eclairage", 1.5, puissance=1000),
+    ]
+
+    tableau = generer_tableau(circuits)
+
+    assert 3 in tableau
+    assert any(c.nom == "Plaque cuisson" for c in tableau[3].circuits)

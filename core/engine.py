@@ -369,10 +369,10 @@ def generer_circuits_logement(surface, nb_chambres):
 
 
 def reconstruire_tableau(circuits):
-    """Reconstruit le tableau à partir des circuits existants."""
+    """Reconstruit le tableau à partir des circuits déjà affectés à une ligne."""
     tableau = {}
     for c in circuits:
-        if c.existant and c.id_diff is not None:
+        if c.id_diff is not None:
             if c.id_diff not in tableau:
                 tableau[c.id_diff] = InterDiff(
                     id=c.id_diff,
@@ -437,7 +437,7 @@ def generer_tableau(circuits):
     """Génère le tableau électrique avec répartition intelligente."""
     tableau = reconstruire_tableau(circuits)
     nouveaux = sorted(
-        [c for c in circuits if not c.existant],
+        [c for c in circuits if c.id_diff is None],
         key=lambda c: regles_circuit(c)["puissance"],
         reverse=True
     )

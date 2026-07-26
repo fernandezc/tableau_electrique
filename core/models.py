@@ -13,7 +13,7 @@ class Circuit:
     nb_reel: int = 0
     dj_existant: Optional[int] = None  # calibre disjoncteur existant (0 = non renseigné)
     existant: bool = False
-    id_diff: Optional[int] = None
+    id_diff: Optional[int] = None  # ligne / ID différentiel souhaité
 
 
 @dataclass
