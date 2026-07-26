@@ -23,9 +23,22 @@ def init_db():
             chambres INTEGER,
             has_pac INTEGER DEFAULT 0,
             has_ve INTEGER DEFAULT 0,
-            has_atelier INTEGER DEFAULT 0
+            has_atelier INTEGER DEFAULT 0,
+            calibres_id TEXT NOT NULL DEFAULT '{}',
+            types_id TEXT NOT NULL DEFAULT '{}'
         )
     """)
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+    }
+    if "calibres_id" not in columns:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN calibres_id TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "types_id" not in columns:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN types_id TEXT NOT NULL DEFAULT '{}'"
+        )
     conn.commit()
     conn.close()
 
@@ -52,6 +65,8 @@ def load_project(project_id):
         "has_pac": bool(row[7]) if row[7] else False,
         "has_ve": bool(row[8]) if row[8] else False,
         "has_atelier": bool(row[9]) if row[9] else False,
+        "calibres_id": json.loads(row[10] or "{}"),
+        "types_id": json.loads(row[11] or "{}"),
     }
     return circuits, metadata, row[1]
 
@@ -71,7 +86,7 @@ def save_project(project_id, circuits, name=None, metadata=None):
         )
     if metadata is not None:
         conn.execute(
-            """UPDATE projects SET surface = ?, chambres = ?, has_pac = ?, has_ve = ?, has_atelier = ?
+            """UPDATE projects SET surface = ?, chambres = ?, has_pac = ?, has_ve = ?, has_atelier = ?, calibres_id = ?, types_id = ?
                WHERE id = ?""",
             (
                 metadata.get("surface"),
@@ -79,6 +94,8 @@ def save_project(project_id, circuits, name=None, metadata=None):
                 int(metadata.get("has_pac", False)),
                 int(metadata.get("has_ve", False)),
                 int(metadata.get("has_atelier", False)),
+                json.dumps(metadata.get("calibres_id", {})),
+                json.dumps(metadata.get("types_id", {})),
                 project_id,
             ),
         )

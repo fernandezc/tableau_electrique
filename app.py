@@ -129,17 +129,35 @@ def refresh_project_selector():
     st.session_state.project_selector_key += 1
 
 
-def auto_save():
-    """Sauvegarde automatique dans le projet courant."""
+def collect_project_metadata():
     meta = {}
     for k in META_STATE_KEYS:
         if k in st.session_state and st.session_state[k] is not None:
             meta[k.replace("last_", "", 1)] = st.session_state[k]
+
+    calibres = {}
+    types_id = {}
+    for key, value in st.session_state.items():
+        if key.startswith("caliber_") and value:
+            calibres[key.removeprefix("caliber_")] = value
+        if key.startswith("inter_type_") and value:
+            types_id[key.removeprefix("inter_type_")] = value
+    meta["calibres_id"] = calibres
+    meta["types_id"] = types_id
+    return meta
+
+
+def save_project_preferences():
     save_project(
         st.session_state.current_project_id,
         st.session_state.circuits,
-        metadata=meta,
+        metadata=collect_project_metadata(),
     )
+
+
+def auto_save():
+    """Sauvegarde automatique dans le projet courant."""
+    save_project_preferences()
 
 
 def _load_project_into_state(pid):
@@ -156,6 +174,18 @@ def _load_project_into_state(pid):
         st.session_state.last_has_pac = meta.get("has_pac", False)
         st.session_state.last_has_ve = meta.get("has_ve", False)
         st.session_state.last_has_atelier = meta.get("has_atelier", False)
+    for id_inter, calibre in (meta.get("calibres_id") or {}).items():
+        st.session_state[f"caliber_{id_inter}"] = calibre
+    for id_inter, inter_type in (meta.get("types_id") or {}).items():
+        st.session_state[f"inter_type_{id_inter}"] = inter_type
+
+
+def apply_id_preferences_to_tableau(tableau):
+    for id_inter, inter in tableau.items():
+        preferred_type = st.session_state.get(f"inter_type_{id_inter}")
+        if preferred_type in {"A", "AC"}:
+            inter.type = preferred_type
+    return tableau
 
 
 def persist_tableau_line_assignments(tableau, renumber=False):
@@ -172,13 +202,21 @@ def persist_tableau_line_assignments(tableau, renumber=False):
     auto_save()
     clear_generated_pdf()
     st.session_state.tableau = generer_tableau(st.session_state.circuits)
+    apply_id_preferences_to_tableau(st.session_state.tableau)
 
 
 def recalculate_tableau_and_persist():
     clear_caliber_state()
     clear_generated_pdf()
     st.session_state.tableau = generer_tableau(st.session_state.circuits)
+    apply_id_preferences_to_tableau(st.session_state.tableau)
     persist_tableau_line_assignments(st.session_state.tableau)
+
+
+def persist_current_id_preferences():
+    if st.session_state.tableau is not None:
+        apply_id_preferences_to_tableau(st.session_state.tableau)
+    save_project_preferences()
 
 
 def render_labels_preview(tableau):
@@ -820,18 +858,37 @@ with tab_resultat:
                     st.success("La répartition actuelle a été conservée.")
                     st.rerun()
             CALIBRES_ID = ["25A", "40A", "63A", "80A", "100A"]
+            TYPES_ID = ["AC", "A"]
             for id_inter, inter in sorted(tableau.items()):
                 auto_cal = sizing["ids"][id_inter]["calibre"]
                 cal_key = f"caliber_{id_inter}"
+                type_key = f"inter_type_{id_inter}"
                 if cal_key not in st.session_state:
                     st.session_state[cal_key] = auto_cal
+                if type_key not in st.session_state:
+                    st.session_state[type_key] = inter.type
                 idx = CALIBRES_ID.index(st.session_state[cal_key]) if st.session_state[cal_key] in CALIBRES_ID else CALIBRES_ID.index(auto_cal)
+                type_idx = TYPES_ID.index(st.session_state[type_key]) if st.session_state[type_key] in TYPES_ID else TYPES_ID.index(inter.type)
                 p = puissance_inter(inter)
 
                 with st.expander(f"ID {id_inter} — Type {inter.type} — {st.session_state[cal_key]} — {p}VA"):
-                    col_cal, _ = st.columns([1, 4])
+                    col_type, col_cal, _ = st.columns([1, 1, 3])
+                    with col_type:
+                        st.selectbox(
+                            "Type",
+                            TYPES_ID,
+                            index=type_idx,
+                            key=type_key,
+                            on_change=persist_current_id_preferences,
+                        )
                     with col_cal:
-                        st.selectbox("Calibre", CALIBRES_ID, index=idx, key=cal_key)
+                        st.selectbox(
+                            "Calibre",
+                            CALIBRES_ID,
+                            index=idx,
+                            key=cal_key,
+                            on_change=persist_current_id_preferences,
+                        )
                     alertes = analyser_inter(inter)
                     for a in alertes:
                         if "🚨" in a: st.error(a)

@@ -64,7 +64,45 @@ def test_save_project_persists_empty_circuits_and_clears_metadata(tmp_path, monk
         "has_pac": False,
         "has_ve": False,
         "has_atelier": False,
+        "calibres_id": {},
     }
+
+
+def test_save_project_persists_id_calibers(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "tableau_elect.db"))
+    database.init_db()
+
+    pid = database.create_project("Projet calibres")
+    database.save_project(
+        pid,
+        [make_circuit("Prises séjour", "prise", emplacement="Séjour")],
+        metadata={
+            "calibres_id": {"1": "63A", "2": "40A"},
+        },
+    )
+
+    _, metadata, _ = database.load_project(pid)
+
+    assert metadata["calibres_id"] == {"1": "63A", "2": "40A"}
+    assert metadata["types_id"] == {}
+
+
+def test_save_project_persists_id_types(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "tableau_elect.db"))
+    database.init_db()
+
+    pid = database.create_project("Projet types")
+    database.save_project(
+        pid,
+        [make_circuit("Prises séjour", "prise", emplacement="Séjour")],
+        metadata={
+            "types_id": {"1": "A", "2": "AC"},
+        },
+    )
+
+    _, metadata, _ = database.load_project(pid)
+
+    assert metadata["types_id"] == {"1": "A", "2": "AC"}
 
 
 def test_generer_pdf_etiquettes_bytes_returns_pdf_bytes():
