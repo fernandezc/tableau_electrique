@@ -1,0 +1,4 @@
+tableau_elect.db
+.agents/skills/developing-with-streamlit
+*.pyc
+*.egg-info
